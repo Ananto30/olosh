@@ -1,0 +1,56 @@
+syntax = "proto3";
+package agent;
+
+service AgentService {
+  // Bidirectional streaming RPC: agent sends AgentMessage, receives OrchestratorMessage
+  rpc Communicate(stream AgentMessage) returns (stream OrchestratorMessage);
+}
+
+message Heartbeat {
+  int64 timestamp = 1;
+  repeated string running_containers = 2;
+}
+
+message JobAssignment {
+  string job_id = 1;
+  string dockerfile = 2;
+  map<string, string> build_args = 3;
+  map<string, string> run_params = 4;
+}
+
+message JobResult {
+  string job_id = 1;
+  enum Status {
+    PENDING = 0;
+    RUNNING = 1;
+    FINISHED = 2;
+    FAILED = 3;
+  }
+  Status status = 2;
+  string container_id = 3;
+  string detail = 4;
+}
+
+message LogRequest {
+  string job_id = 1;
+}
+
+message LogResponse {
+  string job_id = 1;
+  string content = 2;
+}
+
+message AgentMessage {
+  oneof payload {
+    Heartbeat heartbeat = 1;
+    JobResult job_result = 2;
+    LogResponse log_response = 3;
+  }
+}
+
+message OrchestratorMessage {
+  oneof payload {
+    JobAssignment job_assignment = 1;
+    LogRequest log_request = 2;
+  }
+}
