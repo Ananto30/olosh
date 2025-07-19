@@ -1,20 +1,18 @@
-
 import io
-import time
-import uuid
+import logging
+import os
+import queue
 import tarfile
 import threading
-import queue
-import logging
+import time
+import uuid
 from typing import Dict, List
-import os
-import grpc
-import docker
-from pydantic import BaseModel
-import requests
 
-from .protos import agent_service_pb2 as pb
-from .protos import agent_service_pb2_grpc as grpc_pb
+import docker
+import grpc
+import protos.agent_service_pb2 as pb
+import protos.agent_service_pb2_grpc as grpc_pb
+import requests
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
@@ -86,13 +84,17 @@ def run_job(job: pb.JobAssignment):
     tar_stream = io.BytesIO()
     with tarfile.open(fileobj=tar_stream, mode="w") as tar:
         df_bytes = job.dockerfile.encode("utf-8")
-        info = tarfile.TarInfo(name="Dockerfile"); info.size = len(df_bytes)
+        info = tarfile.TarInfo(name="Dockerfile")
+        info.size = len(df_bytes)
         tar.addfile(info, io.BytesIO(df_bytes))
     tar_stream.seek(0)
 
     try:
         image, _ = docker_client.images.build(
-            fileobj=tar_stream, custom_context=True, tag=f"{HOSTNAME}-{job_id}", buildargs=job.build_args
+            fileobj=tar_stream,
+            custom_context=True,
+            tag=f"{HOSTNAME}-{job_id}",
+            buildargs=job.build_args,
         )
         logger.info(f"Job {job_id}: build succeeded")
     except Exception as e:
@@ -144,6 +146,7 @@ def run_job(job: pb.JobAssignment):
                 logger.warning(f"Job {job_id}: container {cid} timed out")
         except:
             pass
+
     threading.Thread(target=timeout_watch, daemon=True).start()
 
     # Wait for exit and capture logs
@@ -177,7 +180,11 @@ def send_logs(job_id: str):
     content = ""
     if cid:
         try:
-            content = docker_client.containers.get(cid).logs().decode("utf-8", errors="replace")
+            content = (
+                docker_client.containers.get(cid)
+                .logs()
+                .decode("utf-8", errors="replace")
+            )
         except Exception as e:
             content = f"Error fetching logs: {e}"
     log_resp = pb.LogResponse(job_id=job_id, content=content)
@@ -186,7 +193,12 @@ def send_logs(job_id: str):
 
 def register_agent():
     """Register via HTTP to get agent_id"""
-    payload = {"hostname": HOSTNAME, "cpu": os.getenv("CPU", 2), "mem": os.getenv("MEM", 2048), "labels": []}
+    payload = {
+        "hostname": HOSTNAME,
+        "cpu": os.getenv("CPU", 2),
+        "mem": os.getenv("MEM", 2048),
+        "labels": [],
+    }
     resp = requests.post(f"{ORCHESTRATOR_HTTP}/agents/register", json=payload)
     resp.raise_for_status()
     agent_id = resp.json()["agent_id"]
@@ -206,6 +218,7 @@ def main():
 
     while True:
         time.sleep(60)
+
 
 if __name__ == "__main__":
     main()
