@@ -14,9 +14,10 @@ import grpc
 import grpc.aio
 import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
+from agent_service import AgentService
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, PrivateAttr
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -55,34 +56,40 @@ class LogRequestPayload(BaseModel):
     job_id: str
 
 
-# Internal representations
-class Agent:
-    def __init__(self, reg: AgentRegistration):
-        self.id = str(uuid.uuid4())
-        self.hostname = reg.hostname
-        self.cpu = reg.cpu
-        self.mem = reg.mem
-        self.labels = reg.labels
-        self.last_seen = time.time()
-        self.running_containers: List[str] = []
-        self.queue: asyncio.Queue = asyncio.Queue()
-        self.cpu_percent: float = 0.0
-        self.mem_percent: float = 0.0
+class Agent(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    hostname: str
+    cpu: int
+    mem: int
+    labels: List[str]
+    last_seen: float = Field(default_factory=time.time)
+    running_containers: List[str] = Field(default_factory=list)
+    cpu_percent: float = 0.0
+    mem_percent: float = 0.0
+    _queue: asyncio.Queue = PrivateAttr(default_factory=asyncio.Queue)
+
+    @classmethod
+    def from_registration(cls, reg: AgentRegistration):
+        return cls(
+            hostname=reg.hostname,
+            cpu=reg.cpu,
+            mem=reg.mem,
+            labels=reg.labels,
+        )
 
 
-class JobInfo:
-    def __init__(self, dockerfile: str, build_args: Dict[str, str], run_params: Dict):
-        self.job_id = str(uuid.uuid4())
-        self.dockerfile = dockerfile
-        self.build_args = build_args
-        self.run_params = run_params
-        self.status = "pending"
-        self.agent_id: Optional[str] = None
-        self.container_id: Optional[str] = None
-        self.detail: str = ""
-        self.created = time.time()
-        self.updated = self.created
-        self.logs_full: Optional[str] = None
+class JobInfo(BaseModel):
+    job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    dockerfile: str
+    build_args: Dict[str, str]
+    run_params: Dict
+    status: str = "pending"
+    agent_id: Optional[str] = None
+    container_id: Optional[str] = None
+    detail: str = ""
+    created: float = Field(default_factory=time.time)
+    updated: float = Field(default_factory=time.time)
+    logs_full: Optional[str] = None
 
 
 # ─── IN‑MEMORY STATE ───────────────────────────────────────────────────────────
@@ -92,83 +99,12 @@ jobs: Dict[str, JobInfo] = {}
 log_waiters: Dict[str, asyncio.Queue] = {}
 
 
-# ─── gRPC AGENT SERVICE ────────────────────────────────────────────────────────
-class AgentService(grpc_pb.AgentServiceServicer):
-    async def Communicate(self, request_iterator, context):
-        # Identify agent via metadata
-        md = dict(context.invocation_metadata())
-        agent_id = md.get("agent-id")
-        if not agent_id or agent_id not in agents:
-            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Unknown agent")
-        agent = agents[agent_id]
-        logger.info(f"gRPC: Agent {agent_id} connected")
-
-        try:
-            # Process incoming and outgoing concurrently
-            async for msg in request_iterator:
-                # Handle heartbeat
-                if msg.HasField("heartbeat"):
-                    hb = msg.heartbeat
-                    agent.last_seen = hb.timestamp
-                    agent.running_containers = list(hb.running_containers)
-                    agent.cpu_percent = getattr(hb, "cpu_percent", 0.0)
-                    agent.mem_percent = getattr(hb, "mem_percent", 0.0)
-                    # reconcile jobs
-                    for job in jobs.values():
-                        if job.agent_id == agent_id and job.status == "running":
-                            if job.container_id not in agent.running_containers:
-                                job.status = "finished"
-                                job.updated = time.time()
-                                logger.info(
-                                    f"Job {job.job_id} marked finished (container gone)"
-                                )
-                # Handle job result
-                elif msg.HasField("job_result"):
-                    jr = msg.job_result
-                    job = jobs.get(jr.job_id)
-                    if job:
-                        # map status enum
-                        if jr.status == pb.JobResult.RUNNING:
-                            job.status = "running"
-                        elif jr.status == pb.JobResult.FINISHED:
-                            job.status = "finished"
-                        else:
-                            job.status = "failed"
-                        job.container_id = jr.container_id
-                        job.detail = jr.detail
-                        job.updated = time.time()
-                        # satisfy any log waiter for finished job
-                        if job.job_id in log_waiters and job.logs_full is not None:
-                            # skip; full logs handled separately
-                            pass
-                        logger.info(f"Job {job.job_id} status updated to {job.status}")
-                # Handle log response
-                elif msg.HasField("log_response"):
-                    lr = msg.log_response
-                    job = jobs.get(lr.job_id)
-                    if job:
-                        job.logs_full = lr.content
-                        job.updated = time.time()
-                        # deliver to waiter if exists
-                        queue = log_waiters.get(lr.job_id)
-                        if queue:
-                            await queue.put(lr.content)
-                # After processing incoming, send any queued messages
-                # Drain agent.queue
-                while not agent.queue.empty():
-                    out = await agent.queue.get()
-                    await context.write(out)
-        except asyncio.CancelledError:
-            logger.info(f"gRPC: Agent {agent_id} disconnected")
-        finally:
-            logger.info(f"gRPC: Cleanup agent {agent_id}")
-            # Optionally cleanup queues
-
-
 # ─── gRPC SERVER STARTUP ───────────────────────────────────────────────────────
 async def serve_grpc():
     server = grpc.aio.server()
-    grpc_pb.add_AgentServiceServicer_to_server(AgentService(), server)
+    grpc_pb.add_AgentServiceServicer_to_server(
+        AgentService(agents, jobs, log_waiters), server
+    )
     listen_addr = "[::]:50051"
     server.add_insecure_port(listen_addr)
     await server.start()
@@ -198,7 +134,7 @@ app = FastAPI(
 
 @app.post("/agents/register")
 def http_register(reg: AgentRegistration):
-    agent = Agent(reg)
+    agent = Agent.from_registration(reg)
     agents[agent.id] = agent
     logger.info(f"HTTP: Registered agent {agent.id}")
     return {"agent_id": agent.id}
@@ -249,7 +185,7 @@ async def http_run(request: Request):
         raise HTTPException(400, "Missing 'dockerfile'")
 
     # create job
-    job = JobInfo(dockerfile, build_args, run_params)
+    job = JobInfo(dockerfile=dockerfile, build_args=build_args, run_params=run_params)
 
     # pick best agent
     alive = {aid: ag for aid, ag in agents.items() if time.time() - ag.last_seen < 60}
@@ -269,7 +205,7 @@ async def http_run(request: Request):
             run_params={k: str(v) for k, v in job.run_params.items()},
         )
     )
-    best.queue.put_nowait(assignment)
+    best._queue.put_nowait(assignment)
 
     logger.info(f"HTTP: Dispatched job {job.job_id} to agent {best.id}")
     return {"job_id": job.job_id, "agent_id": best.id}
@@ -304,7 +240,7 @@ async def http_get_logs(job_id: str):
     agent = agents.get(job.agent_id)
     if not agent:
         raise HTTPException(503, "Agent offline")
-    agent.queue.put_nowait(
+    agent._queue.put_nowait(
         pb.OrchestratorMessage(log_request=pb.LogRequest(job_id=job_id))
     )
     try:
