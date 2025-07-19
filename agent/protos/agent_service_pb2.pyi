@@ -8,12 +8,16 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class Heartbeat(_message.Message):
-    __slots__ = ("timestamp", "running_containers")
+    __slots__ = ("timestamp", "running_containers", "cpu_percent", "mem_percent")
     TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
     RUNNING_CONTAINERS_FIELD_NUMBER: _ClassVar[int]
+    CPU_PERCENT_FIELD_NUMBER: _ClassVar[int]
+    MEM_PERCENT_FIELD_NUMBER: _ClassVar[int]
     timestamp: int
     running_containers: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, timestamp: _Optional[int] = ..., running_containers: _Optional[_Iterable[str]] = ...) -> None: ...
+    cpu_percent: float
+    mem_percent: float
+    def __init__(self, timestamp: _Optional[int] = ..., running_containers: _Optional[_Iterable[str]] = ..., cpu_percent: _Optional[float] = ..., mem_percent: _Optional[float] = ...) -> None: ...
 
 class JobAssignment(_message.Message):
     __slots__ = ("job_id", "dockerfile", "build_args", "run_params")

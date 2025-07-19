@@ -9,6 +9,8 @@ service AgentService {
 message Heartbeat {
   int64 timestamp = 1;
   repeated string running_containers = 2;
+  float cpu_percent = 3;
+  float mem_percent = 4;
 }
 
 message JobAssignment {

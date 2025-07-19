@@ -12,6 +12,7 @@ import docker
 import grpc
 import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
+import psutil
 import requests
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
@@ -22,17 +23,35 @@ HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
 HEARTBEAT_INTERVAL = 10  # seconds
 TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
 
+
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+class CustomFormatter(logging.Formatter):
+    def format(self, record):
+        record.hostname = HOSTNAME
+        record.threadName = threading.current_thread().name
+        # Pad levelname to 7 chars for alignment (e.g., 'WARNING ')
+        record.levelname = f"{record.levelname:<7}"
+        return super().format(record)
+
+
+LOG_FORMAT = "[%(asctime)s] [%(levelname)s] [%(hostname)s] [%(threadName)s] %(message)s"
+handler = logging.StreamHandler()
+handler.setFormatter(CustomFormatter(LOG_FORMAT))
 logger = logging.getLogger("grpc_agent")
+logger.setLevel(logging.INFO)
+logger.handlers.clear()
+logger.addHandler(handler)
+
 
 # ─── DOCKER CLIENT ────────────────────────────────────────────────────────────
 docker_client = docker.from_env()
+
 
 # ─── STATE ─────────────────────────────────────────────────────────────────────
 running_containers: List[str] = []
 job_containers: Dict[str, str] = {}  # job_id -> container_id
 lock = threading.Lock()
+
 
 # ─── MESSAGE QUEUE ─────────────────────────────────────────────────────────────
 message_queue: "queue.Queue[pb.AgentMessage]" = queue.Queue()
@@ -57,7 +76,16 @@ def message_generator():
         if time.time() >= next_hb:
             with lock:
                 containers = list(running_containers)
-            hb = pb.Heartbeat(timestamp=int(time.time()), running_containers=containers)
+            # Get actual CPU and memory usage
+            cpu_percent = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            mem_percent = mem.percent
+            hb = pb.Heartbeat(
+                timestamp=int(time.time()),
+                running_containers=containers,
+                cpu_percent=cpu_percent,
+                mem_percent=mem_percent,
+            )
             yield pb.AgentMessage(heartbeat=hb)
             next_hb = time.time() + HEARTBEAT_INTERVAL
 
@@ -193,10 +221,13 @@ def send_logs(job_id: str):
 
 def register_agent():
     """Register via HTTP to get agent_id"""
+    # Get actual CPU core count and total memory in MB
+    cpu_count = psutil.cpu_count(logical=True)
+    mem_total = int(psutil.virtual_memory().total / (1024 * 1024))
     payload = {
         "hostname": HOSTNAME,
-        "cpu": os.getenv("CPU", 2),
-        "mem": os.getenv("MEM", 2048),
+        "cpu": cpu_count,
+        "mem": mem_total,
         "labels": [],
     }
     resp = requests.post(f"{ORCHESTRATOR_HTTP}/agents/register", json=payload)
@@ -207,17 +238,27 @@ def register_agent():
 
 
 def main():
-    agent_id = register_agent()
-    metadata = [("agent-id", agent_id)]
-
-    channel = grpc.insecure_channel(ORCHESTRATOR_GRPC)
-    stub = grpc_pb.AgentServiceStub(channel)
-    stream = stub.Communicate(message_generator(), metadata=metadata)
-
-    threading.Thread(target=handle_responses, args=(stream,), daemon=True).start()
-
     while True:
-        time.sleep(60)
+        try:
+            agent_id = register_agent()
+            metadata = [("agent-id", agent_id)]
+
+            channel = grpc.insecure_channel(ORCHESTRATOR_GRPC)
+            stub = grpc_pb.AgentServiceStub(channel)
+            stream = stub.Communicate(message_generator(), metadata=metadata)
+
+            t = threading.Thread(target=handle_responses, args=(stream,), daemon=True)
+            t.start()
+
+            # Wait for the response thread to finish (i.e., connection lost)
+            while t.is_alive():
+                time.sleep(1)
+            logger.warning(
+                "gRPC connection lost. Will retry registration in 5 seconds."
+            )
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+        time.sleep(5)
 
 
 if __name__ == "__main__":

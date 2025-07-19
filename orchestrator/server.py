@@ -34,6 +34,8 @@ class AgentRegistration(BaseModel):
 class HeartbeatPayload(BaseModel):
     timestamp: int
     running_containers: List[str]
+    cpu_percent: float = 0.0
+    mem_percent: float = 0.0
 
 
 class RunDockerfileRequest(BaseModel):
@@ -64,6 +66,8 @@ class Agent:
         self.last_seen = time.time()
         self.running_containers: List[str] = []
         self.queue: asyncio.Queue = asyncio.Queue()
+        self.cpu_percent: float = 0.0
+        self.mem_percent: float = 0.0
 
 
 class JobInfo:
@@ -107,6 +111,8 @@ class AgentService(grpc_pb.AgentServiceServicer):
                     hb = msg.heartbeat
                     agent.last_seen = hb.timestamp
                     agent.running_containers = list(hb.running_containers)
+                    agent.cpu_percent = getattr(hb, "cpu_percent", 0.0)
+                    agent.mem_percent = getattr(hb, "mem_percent", 0.0)
                     # reconcile jobs
                     for job in jobs.values():
                         if job.agent_id == agent_id and job.status == "running":
@@ -210,6 +216,8 @@ def http_list_agents():
                 "labels": ag.labels,
                 "running_containers": len(ag.running_containers),
                 "last_seen": ag.last_seen,
+                "cpu_percent": getattr(ag, "cpu_percent", 0.0),
+                "mem_percent": getattr(ag, "mem_percent", 0.0),
             }
             for aid, ag in agents.items()
             if now - ag.last_seen < 60
