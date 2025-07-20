@@ -5,13 +5,25 @@ import subprocess
 import sys
 
 import requests
+from tqdm import tqdm
 
 
 def save_docker_image(image_name, output_path):
     """Save a local Docker image as a tarball using docker or podman."""
     tool = get_container_tool()
     cmd = [tool, "save", "-o", output_path, image_name]
-    subprocess.check_call(cmd)
+    try:
+        subprocess.check_call(cmd)
+    except subprocess.CalledProcessError as e:
+        print(
+            f"\033[91mError: Docker image '{image_name}' not found or could not be saved.\033[0m",
+            file=sys.stderr,
+        )
+        print(
+            f"Details: {e}\nMake sure the image exists locally. Use '{tool} images' to list available images.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def get_container_tool():
@@ -30,12 +42,45 @@ def get_container_tool():
 
 
 def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
-    """Push a docker image tarball to the orchestrator."""
-    files = {"docker_image": open(image_tar_path, "rb")}
+    """Push a docker image tarball to the orchestrator, showing a loader/progress bar."""
+
+    file_size = os.path.getsize(image_tar_path)
     data = {"run_params": json.dumps(run_params or {})}
-    resp = requests.post(
-        f"{orchestrator_url.rstrip('/')}/run-dockerimage", files=files, data=data
-    )
+
+    class FileWithProgress:
+        def __init__(self, filename, mode, total, tqdm_instance=None):
+            self.f = open(filename, mode)
+            self.total = total
+            self.tqdm = tqdm_instance
+            self.read_bytes = 0
+
+        def read(self, size=-1):
+            chunk = self.f.read(size)
+            if chunk and self.tqdm:
+                self.tqdm.update(len(chunk))
+            self.read_bytes += len(chunk) if chunk else 0
+            return chunk
+
+        def __getattr__(self, name):
+            return getattr(self.f, name)
+
+        def close(self):
+            if self.tqdm:
+                self.tqdm.close()
+            self.f.close()
+
+    with tqdm(
+        total=file_size, unit="B", unit_scale=True, desc="Uploading", ncols=80
+    ) as t:
+        fileobj = FileWithProgress(image_tar_path, "rb", file_size, t)
+        files = {"docker_image": fileobj}
+        resp = requests.post(
+            f"{orchestrator_url.rstrip('/')}/run-dockerimage",
+            files=files,
+            data=data,
+        )
+        fileobj.close()
+
     try:
         resp.raise_for_status()
         return resp.json()
