@@ -21,7 +21,7 @@ ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
 HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
 
-MAX_IMAGE_SIZE = 600 * 1024 * 1024  # 600MB
+MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
 HEARTBEAT_INTERVAL = 10  # seconds
 TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
 
@@ -128,16 +128,53 @@ def run_job(job: pb.JobAssignment):
         message_queue.put(pb.AgentMessage(job_result=result))
         return
 
-    # Run container
+    # Run container with a name for easier management
+    container_name = f"olosh-job-{job_id}"
     try:
+        import ast
+
+        allowed_keys = {
+            "environment",
+            "command",
+            "entrypoint",
+            "working_dir",
+            "user",
+            "ports",
+            "volumes",
+        }
+        raw_params = dict(job.run_params)
+        run_params = {}
+        for k in allowed_keys:
+            if k in raw_params:
+                if k in {"ports", "volumes"}:
+                    v = raw_params[k]
+                    if isinstance(v, str):
+                        try:
+                            v = ast.literal_eval(v)
+                        except Exception:
+                            continue
+                    if isinstance(v, dict):
+                        run_params[k] = v
+                else:
+                    run_params[k] = raw_params[k]
+        # Ensure image_id is a string, fallback to tag if needed
+        image_id = getattr(image, "id", None)
+        if not image_id or image_id is None:
+            tags = getattr(image, "tags", [])
+            if tags:
+                image_id = tags[0]
+            else:
+                raise RuntimeError("No valid image id or tag found for loaded image")
         container = docker_client.containers.run(
-            image.id, detach=True, **job.run_params
+            image_id, detach=True, name=container_name, **run_params
         )
         cid = container.id
+        if not cid or cid is None:
+            raise RuntimeError("Container id is None after creation")
         with lock:
             running_containers.append(cid)
             job_containers[job_id] = cid
-        logger.info(f"Job {job_id}: container {cid} started")
+        logger.info(f"Job {job_id}: container {cid} started with name {container_name}")
         running_msg = pb.JobResult(
             job_id=job_id,
             status=pb.JobResult.RUNNING,
@@ -160,10 +197,11 @@ def run_job(job: pb.JobAssignment):
     def timeout_watch():
         time.sleep(TIMEOUT_TIMER)
         try:
-            c = docker_client.containers.get(cid)
-            if c.status == "running":
-                c.stop()
-                logger.warning(f"Job {job_id}: container {cid} timed out")
+            if cid:
+                c = docker_client.containers.get(cid)
+                if c.status == "running":
+                    c.stop()
+                    logger.warning(f"Job {job_id}: container {cid} timed out")
         except:
             pass
 

@@ -7,6 +7,19 @@ import sys
 import requests
 from tqdm import tqdm
 
+# For true streaming multipart upload with progress
+try:
+    from requests_toolbelt.multipart.encoder import (
+        MultipartEncoder,
+        MultipartEncoderMonitor,
+    )
+except ImportError:
+    print(
+        "\033[91mError: 'requests_toolbelt' is required for upload progress. Install with 'pip install requests-toolbelt'.\033[0m",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 
 def save_docker_image(image_name, output_path):
     """Save a local Docker image as a tarball using docker or podman."""
@@ -42,44 +55,33 @@ def get_container_tool():
 
 
 def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
-    """Push a docker image tarball to the orchestrator, showing a loader/progress bar."""
+    """Push a docker image tarball to the orchestrator, showing a true network upload progress bar."""
 
     file_size = os.path.getsize(image_tar_path)
-    data = {"run_params": json.dumps(run_params or {})}
-
-    class FileWithProgress:
-        def __init__(self, filename, mode, total, tqdm_instance=None):
-            self.f = open(filename, mode)
-            self.total = total
-            self.tqdm = tqdm_instance
-            self.read_bytes = 0
-
-        def read(self, size=-1):
-            chunk = self.f.read(size)
-            if chunk and self.tqdm:
-                self.tqdm.update(len(chunk))
-            self.read_bytes += len(chunk) if chunk else 0
-            return chunk
-
-        def __getattr__(self, name):
-            return getattr(self.f, name)
-
-        def close(self):
-            if self.tqdm:
-                self.tqdm.close()
-            self.f.close()
+    fields = {
+        "docker_image": (
+            os.path.basename(image_tar_path),
+            open(image_tar_path, "rb"),
+            "application/x-tar",
+        ),
+        "run_params": json.dumps(run_params or {}),
+    }
+    encoder = MultipartEncoder(fields=fields)
 
     with tqdm(
-        total=file_size, unit="B", unit_scale=True, desc="Uploading", ncols=80
+        total=encoder.len, unit="B", unit_scale=True, desc="Uploading", ncols=80
     ) as t:
-        fileobj = FileWithProgress(image_tar_path, "rb", file_size, t)
-        files = {"docker_image": fileobj}
+
+        def monitor_callback(monitor):
+            t.update(monitor.bytes_read - t.n)
+
+        monitor = MultipartEncoderMonitor(encoder, monitor_callback)
+        headers = {"Content-Type": monitor.content_type}
         resp = requests.post(
             f"{orchestrator_url.rstrip('/')}/run-dockerimage",
-            files=files,
-            data=data,
+            data=monitor,
+            headers=headers,
         )
-        fileobj.close()
 
     try:
         resp.raise_for_status()

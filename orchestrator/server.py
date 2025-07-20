@@ -7,7 +7,9 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import tarfile
+import tempfile
 import time
 import uuid
 from io import BytesIO
@@ -29,7 +31,7 @@ logger = logging.getLogger("orchestrator")
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://0.0.0.0:8000")
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
 
-MAX_IMAGE_SIZE = 600 * 1024 * 1024  # 600MB
+MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
 STALE_AGENT_TIMEOUT = 60  # seconds
 
 
@@ -179,20 +181,30 @@ async def http_run_dockerimage(
       - run_params: JSON string (optional)
     """
 
-    # Read docker image bytes
-    docker_image_bytes = await docker_image.read()
-    if len(docker_image_bytes) > MAX_IMAGE_SIZE:
-        raise HTTPException(
-            413,
-            f"Docker image too large (>{MAX_IMAGE_SIZE // (1024*1024)}MB). Limit is 600MB.",
-        )
+    # Stream upload to a temporary file to avoid memory spikes
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        temp_path = tmp.name
+        size = 0
+        while True:
+            chunk = await docker_image.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_IMAGE_SIZE:
+                tmp.close()
+                os.remove(temp_path)
+                raise HTTPException(
+                    413, f"Docker image too large (>{MAX_IMAGE_SIZE // (1024*1024)}MB)"
+                )
+            tmp.write(chunk)
 
     try:
         run_params_dict = json.loads(run_params)
     except Exception:
         run_params_dict = {}
 
-    if not docker_image_bytes:
+    if size == 0:
+        os.remove(temp_path)
         raise HTTPException(400, "Missing or empty docker_image upload")
 
     alive = {
@@ -201,41 +213,47 @@ async def http_run_dockerimage(
         if time.time() - ag.last_seen < STALE_AGENT_TIMEOUT
     }
     if not alive:
+        os.remove(temp_path)
         raise HTTPException(503, "No available agents")
 
     # Check manifest and config for os and arch
     try:
-        with tarfile.open(fileobj=BytesIO(docker_image_bytes), mode="r:*") as tar:
+        with tarfile.open(temp_path, mode="r:*") as tar:
             manifest_file = tar.extractfile("manifest.json")
             if manifest_file is None:
+                os.remove(temp_path)
                 raise HTTPException(400, "manifest.json not found in Docker image")
 
             manifest = json.loads(manifest_file.read())
             if not manifest or not isinstance(manifest, list):
+                os.remove(temp_path)
                 raise HTTPException(400, "Invalid Docker image manifest")
 
             image_info = manifest[0]
             config_filename = image_info.get("Config")
             if not config_filename:
+                os.remove(temp_path)
                 raise HTTPException(
                     400, "Config filename not found in Docker image manifest"
                 )
 
             config_file = tar.extractfile(config_filename)
             if config_file is None:
+                os.remove(temp_path)
                 raise HTTPException(
                     400, f"Config file {config_filename} not found in Docker image"
                 )
 
             config_json = json.loads(config_file.read())
-            print("mama", config_json)
             manifest_os = config_json.get("os")
             manifest_arch = config_json.get("architecture")
             if not manifest_os or not manifest_arch:
+                os.remove(temp_path)
                 raise HTTPException(
                     400, "Missing os or architecture in Docker image config"
                 )
     except Exception as e:
+        os.remove(temp_path)
         raise HTTPException(400, f"Failed to read Docker image manifest/config: {e}")
 
     # If not agents with platform info, ask the user to build with --platform of available agents
@@ -249,10 +267,18 @@ async def http_run_dockerimage(
             f"{ag.hostname} (os={ag.platform.os}, arch={ag.platform.arch})"
             for ag in alive.values()
         ]
+        os.remove(temp_path)
         raise HTTPException(
             400,
             f"Please build the image with --platform of one of the available agents: {', '.join(available)}",
         )
+
+    # Read the file back into memory for gRPC (if needed)
+    with open(temp_path, "rb") as f:
+        docker_image_bytes = f.read()
+
+    # Clean up temp file
+    os.remove(temp_path)
 
     # Create job
     job = JobInfo(

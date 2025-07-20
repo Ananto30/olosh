@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.11.7",
     "python-multipart>=0.0.20",
     "requests>=2.32.4",
+    "requests-toolbelt>=1.0.0",
     "tqdm>=4.67.1",
     "uvicorn>=0.35.0",
 ]
