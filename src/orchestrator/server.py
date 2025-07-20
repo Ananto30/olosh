@@ -28,7 +28,7 @@ logger = logging.getLogger("orchestrator")
 
 # ─── CONFIG ──────────────────────────────────────────────────────────
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://0.0.0.0:8000")
-ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
+ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "0.0.0.0:50051")
 
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
 STALE_AGENT_TIMEOUT = 60  # seconds

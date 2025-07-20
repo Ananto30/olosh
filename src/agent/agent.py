@@ -28,7 +28,8 @@ except ImportError:
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
-ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
+ip = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
+ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", f"{ip}:50051")
 HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
 
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
