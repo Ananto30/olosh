@@ -7,12 +7,10 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import tarfile
 import tempfile
 import time
 import uuid
-from io import BytesIO
 from typing import Dict, List, Optional
 
 import grpc
@@ -21,6 +19,7 @@ import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
 from agent_service import AgentService
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
@@ -182,11 +181,26 @@ async def http_run_dockerimage(
     """
 
     # Stream upload to a temporary file to avoid memory spikes
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+    # Use /dev/shm (RAM disk) if available for much faster temp file writes
+    shm_dir = (
+        "/dev/shm"
+        if os.path.isdir("/dev/shm") and os.access("/dev/shm", os.W_OK)
+        else None
+    )
+    if shm_dir:
+        logger.info("Using /dev/shm for temp file upload")
+    else:
+        logger.info("Using default temp dir for upload")
+    start_time = time.time()
+    if shm_dir:
+        tmp = tempfile.NamedTemporaryFile(delete=False, dir=shm_dir)
+    else:
+        tmp = tempfile.NamedTemporaryFile(delete=False)
+    try:
         temp_path = tmp.name
         size = 0
         while True:
-            chunk = await docker_image.read(1024 * 1024)
+            chunk = await docker_image.read(8 * 1024 * 1024)
             if not chunk:
                 break
             size += len(chunk)
@@ -197,6 +211,13 @@ async def http_run_dockerimage(
                     413, f"Docker image too large (>{MAX_IMAGE_SIZE // (1024*1024)}MB)"
                 )
             tmp.write(chunk)
+        tmp.close()
+    finally:
+        pass
+    elapsed = time.time() - start_time
+    logger.info(
+        f"Upload received: {size/(1024*1024):.2f} MB in {elapsed:.2f}s ({(size/1024/1024)/elapsed if elapsed>0 else 0:.2f} MB/s)"
+    )
 
     try:
         run_params_dict = json.loads(run_params)
@@ -323,13 +344,14 @@ def http_list_jobs():
                 "detail": j.detail,
                 "created": j.created,
                 "updated": j.updated,
+                "logs_url": f"/jobs/{j.job_id}/logs",
             }
             for j in jobs.values()
         ]
     }
 
 
-@app.get("/jobs/{job_id}/logs")
+@app.get("/jobs/{job_id}/logs", response_class=PlainTextResponse)
 async def http_get_logs(job_id: str):
     job = jobs.get(job_id)
     if not job:
@@ -348,7 +370,7 @@ async def http_get_logs(job_id: str):
     )
     try:
         content = await asyncio.wait_for(queue.get(), timeout=10)
-        return {"job_id": job_id, "logs": content}
+        return content
     except asyncio.TimeoutError:
         raise HTTPException(504, "Timeout waiting for logs")
     finally:

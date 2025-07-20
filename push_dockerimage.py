@@ -4,21 +4,12 @@ import os
 import subprocess
 import sys
 
-import requests
+import httpx
+from requests_toolbelt.multipart.encoder import (
+    MultipartEncoder,
+    MultipartEncoderMonitor,
+)
 from tqdm import tqdm
-
-# For true streaming multipart upload with progress
-try:
-    from requests_toolbelt.multipart.encoder import (
-        MultipartEncoder,
-        MultipartEncoderMonitor,
-    )
-except ImportError:
-    print(
-        "\033[91mError: 'requests_toolbelt' is required for upload progress. Install with 'pip install requests-toolbelt'.\033[0m",
-        file=sys.stderr,
-    )
-    sys.exit(1)
 
 
 def save_docker_image(image_name, output_path):
@@ -55,39 +46,55 @@ def get_container_tool():
 
 
 def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
-    """Push a docker image tarball to the orchestrator, showing a true network upload progress bar."""
-
+    """Push a docker image tarball to the orchestrator, showing a true network upload progress bar (using httpx)."""
     file_size = os.path.getsize(image_tar_path)
-    fields = {
-        "docker_image": (
-            os.path.basename(image_tar_path),
-            open(image_tar_path, "rb"),
-            "application/x-tar",
-        ),
-        "run_params": json.dumps(run_params or {}),
-    }
-    encoder = MultipartEncoder(fields=fields)
+    with open(image_tar_path, "rb") as f:
+        # httpx requires a tuple (filename, fileobj, content_type)
+        files = {
+            "docker_image": (os.path.basename(image_tar_path), f, "application/x-tar"),
+            "run_params": (None, json.dumps(run_params or {}), "application/json"),
+        }
 
-    with tqdm(
-        total=encoder.len, unit="B", unit_scale=True, desc="Uploading", ncols=80
-    ) as t:
+        # httpx does not natively support progress bars, so we wrap the file object
+        class ProgressFile:
+            def __init__(self, fileobj, total, tqdm_bar):
+                self.fileobj = fileobj
+                self.total = total
+                self.tqdm_bar = tqdm_bar
+                self.read_bytes = 0
 
-        def monitor_callback(monitor):
-            t.update(monitor.bytes_read - t.n)
+            def read(self, size=-1):
+                chunk = self.fileobj.read(size)
+                if chunk:
+                    self.tqdm_bar.update(len(chunk))
+                    self.read_bytes += len(chunk)
+                return chunk
 
-        monitor = MultipartEncoderMonitor(encoder, monitor_callback)
-        headers = {"Content-Type": monitor.content_type}
-        resp = requests.post(
-            f"{orchestrator_url.rstrip('/')}/run-dockerimage",
-            data=monitor,
-            headers=headers,
-        )
+            def __getattr__(self, name):
+                return getattr(self.fileobj, name)
 
+        with tqdm(
+            total=file_size, unit="B", unit_scale=True, desc="Uploading", ncols=80
+        ) as t:
+            pf = ProgressFile(f, file_size, t)
+            files["docker_image"] = (
+                os.path.basename(image_tar_path),
+                pf,
+                "application/x-tar",
+            )
+            with httpx.Client(timeout=None) as client:
+                resp = client.post(
+                    f"{orchestrator_url.rstrip('/')}/run-dockerimage",
+                    files=files,
+                )
     try:
         resp.raise_for_status()
         return resp.json()
-    except requests.RequestException as e:
-        print(f"Error pushing docker image: {e} | {resp.text}", file=sys.stderr)
+    except httpx.RequestError as e:
+        print(
+            f"Error pushing docker image: {e} | {getattr(resp, 'text', '')}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 

@@ -3,7 +3,6 @@ import logging
 import os
 import platform
 import queue
-import tarfile
 import threading
 import time
 import uuid
