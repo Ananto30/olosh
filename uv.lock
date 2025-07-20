@@ -257,6 +257,7 @@ dependencies = [
     { name = "grpcio-tools" },
     { name = "httpx" },
     { name = "pip" },
+    { name = "podman" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "python-multipart" },
@@ -275,6 +276,7 @@ requires-dist = [
     { name = "grpcio-tools", specifier = ">=1.73.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pip", specifier = ">=25.1.1" },
+    { name = "podman", specifier = ">=5.5.0" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "python-multipart", specifier = ">=0.0.20" },
@@ -292,6 +294,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/59/de/241caa0ca606f2ec5fe0c1f4261b0465df78d786a38da693864a116c37f4/pip-25.1.1.tar.gz", hash = "sha256:3de45d411d308d5054c2168185d8da7f9a2cd753dbac8acbfa88a8909ecd9077", size = 1940155, upload-time = "2025-05-02T15:14:02.057Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/29/a2/d40fb2460e883eca5199c62cfc2463fd261f760556ae6290f88488c362c0/pip-25.1.1-py3-none-any.whl", hash = "sha256:2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af", size = 1825227, upload-time = "2025-05-02T15:13:59.102Z" },
+]
+
+[[package]]
+name = "podman"
+version = "5.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/e1/0fee9214caa0fd132fae78d71136a02bbb026711f23ad5063a7fea41a644/podman-5.5.0.tar.gz", hash = "sha256:4416af01d1a236185eb0110488241318eb3fb07337720a955246d807441d8b71", size = 71821, upload-time = "2025-06-18T10:52:07.474Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/22/17/f9c925ca5b19422204c3799ed297d9bb2a5dbec03b765cfde81753c54b3c/podman-5.5.0-py3-none-any.whl", hash = "sha256:bdc6bbc9c86b9fcd79805d98babd9dae6fbeea8cbcc563900aebbfb4d4995008", size = 87378, upload-time = "2025-06-18T10:52:06.108Z" },
 ]
 
 [[package]]

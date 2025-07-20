@@ -3,17 +3,28 @@ import logging
 import os
 import platform
 import queue
+import subprocess
+import sys
 import threading
 import time
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Protocol
 
 import docker
 import grpc
-import protos.agent_service_pb2 as pb
-import protos.agent_service_pb2_grpc as grpc_pb
 import psutil
 import requests
+
+import protos.agent_service_pb2 as pb
+import protos.agent_service_pb2_grpc as grpc_pb
+
+try:
+    import docker
+
+    _docker_available = True
+except ImportError:
+    _docker_available = False
+
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
@@ -45,7 +56,43 @@ logger.addHandler(handler)
 
 
 # ─── DOCKER CLIENT ────────────────────────────────────────────────────────────
-docker_client = docker.from_env()
+
+
+# Try to get a Docker client, fallback to Podman if Docker is not available
+def get_container_client():
+    if _docker_available:
+        try:
+            client = docker.from_env()
+            # Test connection
+            client.ping()
+            logger.info("Using Docker as container backend.")
+            return client
+        except Exception as e:
+            logger.warning(f"Docker not available: {e}")
+    # Try Podman
+    try:
+        # Check if podman is installed
+        subprocess.run(
+            ["podman", "info"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        import podman
+        from podman import PodmanClient
+
+        client = PodmanClient(base_url="unix:///run/podman/podman.sock")
+        logger.info("Using Podman as container backend.")
+        return client
+    except ImportError:
+        logger.error("Neither docker nor podman Python packages are installed.")
+    except Exception as e:
+        logger.error(f"Podman not available: {e}")
+    logger.error("No container backend (docker or podman) available. Exiting.")
+    sys.exit(1)
+
+
+docker_client = get_container_client()
 
 
 # ─── STATE ─────────────────────────────────────────────────────────────────────
