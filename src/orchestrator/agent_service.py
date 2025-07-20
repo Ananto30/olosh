@@ -3,8 +3,9 @@ import logging
 import time
 
 import grpc
-import protos.agent_service_pb2 as pb
-import protos.agent_service_pb2_grpc as grpc_pb
+
+import src.protos.agent_service_pb2 as pb
+import src.protos.agent_service_pb2_grpc as grpc_pb
 
 logger = logging.getLogger("orchestrator")
 

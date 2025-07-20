@@ -7,23 +7,22 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from typing import Dict, List
 
 import docker
 import grpc
 import psutil
 import requests
-from container_clients import (
+from podman import PodmanClient
+
+import src.protos.agent_service_pb2 as pb
+import src.protos.agent_service_pb2_grpc as grpc_pb
+from src.agent.container_clients import (
     ContainerClient,
     DockerContainerClient,
     PodmanContainerClient,
 )
-from podman import PodmanClient
-from pydantic import BaseModel
-
-import protos.agent_service_pb2 as pb
-import protos.agent_service_pb2_grpc as grpc_pb
+from src.agent.utils import get_machine_agent_id
 
 try:
     import docker
@@ -37,7 +36,7 @@ except ImportError:
 ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
 ip = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", f"{ip}:50051")
-HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
+HOSTNAME = get_machine_agent_id()
 
 PODMAN_SOCK = os.getenv("PODMAN_SOCK", "unix:///run/podman/podman.sock")
 
@@ -315,6 +314,7 @@ def send_logs(job_id: str):
 
 def register_agent():
     """Register via HTTP to get agent_id, including platform info"""
+    agent_id = HOSTNAME
     cpu_count = psutil.cpu_count(logical=True)
     mem_total = int(psutil.virtual_memory().total / (1024 * 1024))
     os_name = platform.system().lower()  # e.g., 'linux', 'darwin', 'windows'
@@ -329,18 +329,20 @@ def register_agent():
     }
     arch = arch_map.get(raw_arch, raw_arch)
     payload = {
-        "hostname": HOSTNAME,
+        "id": agent_id,
         "cpu": cpu_count,
         "mem": mem_total,
         "labels": [],
         "platform": {"os": os_name, "arch": arch},
     }
     logger.info(
-        f"Registering agent with platform: os={os_name}, arch={arch} (raw: {raw_arch})"
+        f"Registering agent with platform: os={os_name}, arch={arch} (raw: {raw_arch}), agent_id={agent_id}"
     )
-    resp = requests.post(f"{ORCHESTRATOR_HTTP}/agents/register", json=payload)
+    resp = requests.post(
+        f"{ORCHESTRATOR_HTTP}/agents/register", json=payload, timeout=5
+    )
     resp.raise_for_status()
-    agent_id = resp.json()["agent_id"]
+    # Use our deterministic agent_id
     logger.info(f"Registered agent_id={agent_id}")
     return agent_id
 

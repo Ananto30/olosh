@@ -15,13 +15,13 @@ from typing import Dict, List, Optional
 
 import grpc
 import grpc.aio
-from agent_service import AgentService
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
 
-import protos.agent_service_pb2 as pb
-import protos.agent_service_pb2_grpc as grpc_pb
+import src.protos.agent_service_pb2 as pb
+import src.protos.agent_service_pb2_grpc as grpc_pb
+from src.orchestrator.agent_service import AgentService
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -42,7 +42,7 @@ class AgentPlatform(BaseModel):
 
 
 class AgentRegistration(BaseModel):
-    hostname: str
+    id: str
     cpu: int
     mem: int
     labels: List[str]
@@ -50,8 +50,7 @@ class AgentRegistration(BaseModel):
 
 
 class Agent(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    hostname: str
+    id: str
     cpu: int
     mem: int
     labels: List[str]
@@ -66,7 +65,7 @@ class Agent(BaseModel):
     @classmethod
     def from_registration(cls, reg: AgentRegistration):
         return cls(
-            hostname=reg.hostname,
+            id=reg.id,
             cpu=reg.cpu,
             mem=reg.mem,
             labels=reg.labels,
@@ -164,7 +163,7 @@ def http_list_agents():
     return {
         "agents": {
             aid: {
-                "hostname": ag.hostname,
+                "id": ag.id,
                 "cpu": ag.cpu,
                 "mem": ag.mem,
                 "labels": ag.labels,
@@ -300,7 +299,7 @@ async def http_run_dockerimage(
     ]
     if not agents_with_matching_platform:
         available = [
-            f"{ag.hostname} (os={ag.platform.os}, arch={ag.platform.arch})"
+            f"{ag.id} (os={ag.platform.os}, arch={ag.platform.arch})"
             for ag in alive.values()
         ]
         os.remove(temp_path)

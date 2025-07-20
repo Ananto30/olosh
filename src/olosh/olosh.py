@@ -48,8 +48,7 @@ def orchestrator(
     env = os.environ.copy()
     env["ORCHESTRATOR_HTTP"] = f"http://0.0.0.0:{port}"
     env["ORCHESTRATOR_GRPC"] = f"0.0.0.0:{grpc_port}"
-    orchestrator_dir = os.path.join(os.path.dirname(__file__), "..", "orchestrator")
-    subprocess.run([sys.executable, "-m", "server"], env=env, cwd=orchestrator_dir)
+    subprocess.run([sys.executable, "-m", "src.orchestrator.server"], env=env)
 
 
 @app.command()
@@ -74,8 +73,9 @@ def agent(
     env["ORCHESTRATOR_HTTP"] = orchestrator
     if tls:
         env["AGENT_TLS_CERTS"] = tls
-    agent_dir = os.path.join(os.path.dirname(__file__), "..", "agent")
-    subprocess.run([sys.executable, "-m", "agent"], env=env, cwd=agent_dir)
+    # agent_dir = os.path.join(os.path.dirname(__file__), "..", "agent")
+    # subprocess.run([sys.executable, "-m", "agent"], env=env, cwd=agent_dir)
+    subprocess.run([sys.executable, "-m", "src.agent.agent"], env=env)
 
 
 job_app = typer.Typer(
