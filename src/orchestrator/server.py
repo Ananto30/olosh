@@ -377,6 +377,25 @@ async def http_get_logs(job_id: str):
         del log_waiters[job_id]
 
 
+@app.get("/jobs/{job_id}/status")
+def http_get_job_status(job_id: str):
+    """
+    Get the status of a specific job.
+    """
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return {
+        "job_id": job.job_id,
+        "agent_id": job.agent_id,
+        "status": job.status,
+        "container_id": job.container_id,
+        "detail": job.detail,
+        "created": job.created,
+        "updated": job.updated,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
