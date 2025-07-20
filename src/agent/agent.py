@@ -8,12 +8,19 @@ import sys
 import threading
 import time
 import uuid
-from typing import Dict, List, Protocol
+from typing import Dict, List
 
 import docker
 import grpc
 import psutil
 import requests
+from container_clients import (
+    ContainerClient,
+    DockerContainerClient,
+    PodmanContainerClient,
+)
+from podman import PodmanClient
+from pydantic import BaseModel
 
 import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
@@ -31,6 +38,8 @@ ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
 ip = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", f"{ip}:50051")
 HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
+
+PODMAN_SOCK = os.getenv("PODMAN_SOCK", "unix:///run/podman/podman.sock")
 
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
 HEARTBEAT_INTERVAL = 10  # seconds
@@ -60,16 +69,17 @@ logger.addHandler(handler)
 
 
 # Try to get a Docker client, fallback to Podman if Docker is not available
-def get_container_client():
+def get_container_client() -> ContainerClient:
     if _docker_available:
         try:
             client = docker.from_env()
             # Test connection
             client.ping()
             logger.info("Using Docker as container backend.")
-            return client
+            return DockerContainerClient(client)
         except Exception as e:
             logger.warning(f"Docker not available: {e}")
+
     # Try Podman
     try:
         # Check if podman is installed
@@ -79,21 +89,32 @@ def get_container_client():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import podman
-        from podman import PodmanClient
 
-        client = PodmanClient(base_url="unix:///run/podman/podman.sock")
+        # Check if podman socket is available
+        sock_path = PODMAN_SOCK
+        if sock_path.startswith("unix://"):
+            sock_path = sock_path[len("unix://") :]
+        if not os.path.exists(sock_path):
+            logger.error(
+                f"Podman socket not found at {PODMAN_SOCK} (checked path: {sock_path}). Please set PODMAN_SOCK environment variable. You can find the socket path by running 'podman info'."
+            )
+            sys.exit(1)
+
+        client = PodmanClient(base_url=PODMAN_SOCK)
+        client.ping()
         logger.info("Using Podman as container backend.")
-        return client
+        return PodmanContainerClient(client)
     except ImportError:
         logger.error("Neither docker nor podman Python packages are installed.")
     except Exception as e:
-        logger.error(f"Podman not available: {e}")
+        logger.error(
+            f"Podman not available: {e}. If you use Podman, then pass the socket path via the environment variable PODMAN_SOCK."
+        )
     logger.error("No container backend (docker or podman) available. Exiting.")
     sys.exit(1)
 
 
-docker_client = get_container_client()
+container_client = get_container_client()
 
 
 # ─── STATE ─────────────────────────────────────────────────────────────────────
@@ -160,7 +181,7 @@ def run_job(job: pb.JobAssignment):
     # Load docker image from bytes
     try:
         image_stream = io.BytesIO(job.docker_image)
-        load_result = docker_client.images.load(image_stream.read())
+        load_result = container_client.load_image(image_stream.read())
         # load() returns a list of images, use the first one
         image = load_result[0]
         logger.info(f"Job {job_id}: docker image loaded: {image.id}")
@@ -212,10 +233,9 @@ def run_job(job: pb.JobAssignment):
                 image_id = tags[0]
             else:
                 raise RuntimeError("No valid image id or tag found for loaded image")
-        container = docker_client.containers.run(
-            image_id, detach=True, name=container_name, **run_params
+        cid = container_client.run_container(
+            image_id, name=container_name, **run_params
         )
-        cid = container.id
         if not cid or cid is None:
             raise RuntimeError("Container id is None after creation")
         with lock:
@@ -245,9 +265,9 @@ def run_job(job: pb.JobAssignment):
         time.sleep(TIMEOUT_TIMER)
         try:
             if cid:
-                c = docker_client.containers.get(cid)
-                if c.status == "running":
-                    c.stop()
+                status = container_client.get_container_status(cid)
+                if status == "running":
+                    container_client.stop_container(cid)
                     logger.warning(f"Job {job_id}: container {cid} timed out")
         except:
             pass
@@ -255,16 +275,17 @@ def run_job(job: pb.JobAssignment):
     threading.Thread(target=timeout_watch, daemon=True).start()
 
     # Wait for exit and capture logs
-    exit_info = container.wait()
-    code = exit_info.get("StatusCode", 1)
+    code = container_client.wait_for_exit(cid)
     if code == 0:
         status = pb.JobResult.FINISHED
         detail = ""
         logger.info(f"Job {job_id}: finished successfully")
     else:
-        logs = container.logs(tail=50).decode("utf-8", errors="replace")
+        logs = container_client.get_container_logs(cid)
+        # Only include the last 2000 characters of logs
+        logs_tail = logs[-2000:] if len(logs) > 2000 else logs
         status = pb.JobResult.FAILED
-        detail = f"Exit {code}. Logs:\n{logs}"
+        detail = f"Exit {code}. Logs:\n{logs_tail}"
         logger.error(f"Job {job_id}: failed with code {code}")
 
     with lock:
@@ -285,11 +306,7 @@ def send_logs(job_id: str):
     content = ""
     if cid:
         try:
-            content = (
-                docker_client.containers.get(cid)
-                .logs()
-                .decode("utf-8", errors="replace")
-            )
+            content = container_client.get_container_logs(cid)
         except Exception as e:
             content = f"Error fetching logs: {e}"
     log_resp = pb.LogResponse(job_id=job_id, content=content)
