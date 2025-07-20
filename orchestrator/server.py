@@ -200,7 +200,7 @@ async def http_run_dockerimage(
         temp_path = tmp.name
         size = 0
         while True:
-            chunk = await docker_image.read(8 * 1024 * 1024)
+            chunk = await docker_image.read(32 * 1024 * 1024)
             if not chunk:
                 break
             size += len(chunk)
