@@ -8,9 +8,25 @@ import requests
 
 
 def save_docker_image(image_name, output_path):
-    """Save a local Docker image as a tarball."""
-    cmd = ["docker", "save", "-o", output_path, image_name]
+    """Save a local Docker image as a tarball using docker or podman."""
+    tool = get_container_tool()
+    cmd = [tool, "save", "-o", output_path, image_name]
     subprocess.check_call(cmd)
+
+
+def get_container_tool():
+    """Return 'docker' if available, else 'podman', else print colored error and exit."""
+    import shutil
+
+    for tool in ("docker", "podman"):
+        if shutil.which(tool):
+            return tool
+    # Colored error (red)
+    print(
+        "\033[91mError: Neither 'docker' nor 'podman' is available in PATH. Please install one of them.\033[0m",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
@@ -20,8 +36,12 @@ def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
     resp = requests.post(
         f"{orchestrator_url.rstrip('/')}/run-dockerimage", files=files, data=data
     )
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        print(f"Error pushing docker image: {e} | {resp.text}", file=sys.stderr)
+        sys.exit(1)
 
 
 def main():

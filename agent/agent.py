@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import platform
 import queue
 import tarfile
 import threading
@@ -20,6 +21,7 @@ ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
 HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
 
+MAX_IMAGE_SIZE = 600 * 1024 * 1024  # 600MB
 HEARTBEAT_INTERVAL = 10  # seconds
 TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
 
@@ -210,16 +212,30 @@ def send_logs(job_id: str):
 
 
 def register_agent():
-    """Register via HTTP to get agent_id"""
-    # Get actual CPU core count and total memory in MB
+    """Register via HTTP to get agent_id, including platform info"""
     cpu_count = psutil.cpu_count(logical=True)
     mem_total = int(psutil.virtual_memory().total / (1024 * 1024))
+    os_name = platform.system().lower()  # e.g., 'linux', 'darwin', 'windows'
+    raw_arch = platform.machine().lower()  # e.g., 'x86_64', 'aarch64', 'arm64'
+    # Map to Docker-style arch names
+    arch_map = {
+        "x86_64": "amd64",
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "armv7l": "arm/v7",
+        "armv6l": "arm/v6",
+    }
+    arch = arch_map.get(raw_arch, raw_arch)
     payload = {
         "hostname": HOSTNAME,
         "cpu": cpu_count,
         "mem": mem_total,
         "labels": [],
+        "platform": {"os": os_name, "arch": arch},
     }
+    logger.info(
+        f"Registering agent with platform: os={os_name}, arch={arch} (raw: {raw_arch})"
+    )
     resp = requests.post(f"{ORCHESTRATOR_HTTP}/agents/register", json=payload)
     resp.raise_for_status()
     agent_id = resp.json()["agent_id"]
@@ -236,8 +252,8 @@ def main():
             channel = grpc.insecure_channel(
                 ORCHESTRATOR_GRPC,
                 options=[
-                    ("grpc.max_send_message_length", 100 * 1024 * 1024),
-                    ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+                    ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
+                    ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
                 ],
             )
             stub = grpc_pb.AgentServiceStub(channel)

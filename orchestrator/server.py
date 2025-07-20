@@ -1,9 +1,16 @@
+# orchestrator.py
+# ------------------
+# Orchestrator with HTTP API (FastAPI) and gRPC server (grpc.aio).
+# HTTP on port 8000; gRPC on port 50051.
+
 import asyncio
 import json
 import logging
 import os
+import tarfile
 import time
 import uuid
+from io import BytesIO
 from typing import Dict, List, Optional
 
 import grpc
@@ -11,27 +18,33 @@ import grpc.aio
 import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
 from agent_service import AgentService
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field, PrivateAttr
-
-# orchestrator.py
-# ------------------
-# Orchestrator with HTTP API (FastAPI) and gRPC server (grpc.aio).
-# HTTP on port 8000; gRPC on port 50051.
-
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("orchestrator")
 
+# ─── CONFIG ──────────────────────────────────────────────────────────
+ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://0.0.0.0:8000")
+ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "localhost:50051")
+
+MAX_IMAGE_SIZE = 600 * 1024 * 1024  # 600MB
+STALE_AGENT_TIMEOUT = 60  # seconds
+
 
 # ─── DATA MODELS ───────────────────────────────────────────────────────────────
+class AgentPlatform(BaseModel):
+    os: str
+    arch: str
+
+
 class AgentRegistration(BaseModel):
     hostname: str
     cpu: int
     mem: int
     labels: List[str]
+    platform: AgentPlatform
 
 
 class Agent(BaseModel):
@@ -44,6 +57,8 @@ class Agent(BaseModel):
     running_containers: List[str] = Field(default_factory=list)
     cpu_percent: float = 0.0
     mem_percent: float = 0.0
+    platform: AgentPlatform
+
     _queue: asyncio.Queue = PrivateAttr(default_factory=asyncio.Queue)
 
     @classmethod
@@ -53,6 +68,7 @@ class Agent(BaseModel):
             cpu=reg.cpu,
             mem=reg.mem,
             labels=reg.labels,
+            platform=reg.platform,
         )
 
 
@@ -81,14 +97,14 @@ log_waiters: Dict[str, asyncio.Queue] = {}
 async def serve_grpc():
     server = grpc.aio.server(
         options=[
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
+            ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
         ]
     )
     grpc_pb.add_AgentServiceServicer_to_server(
         AgentService(agents, jobs, log_waiters), server
     )
-    listen_addr = "[::]:50051"
+    listen_addr = f"[::]:{ORCHESTRATOR_GRPC.split(':')[-1]}"
     server.add_insecure_port(listen_addr)
     await server.start()
     logger.info(f"gRPC server listening on {listen_addr}")
@@ -98,9 +114,13 @@ async def serve_grpc():
 # ─── BACKGROUND TASKS ────────────────────────────────────────────────────────────
 async def cleanup_agents():
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(20)
         now = time.time()
-        stale = [aid for aid, ag in agents.items() if now - ag.last_seen > 60]
+        stale = [
+            aid
+            for aid, ag in agents.items()
+            if now - ag.last_seen > STALE_AGENT_TIMEOUT
+        ]
         for aid in stale:
             del agents[aid]
             logger.info(f"Removed stale agent {aid}")
@@ -137,9 +157,13 @@ def http_list_agents():
                 "last_seen": ag.last_seen,
                 "cpu_percent": getattr(ag, "cpu_percent", 0.0),
                 "mem_percent": getattr(ag, "mem_percent", 0.0),
+                "platform": {
+                    "os": ag.platform.os,
+                    "arch": ag.platform.arch,
+                },
             }
             for aid, ag in agents.items()
-            if now - ag.last_seen < 60
+            if now - ag.last_seen < STALE_AGENT_TIMEOUT
         }
     }
 
@@ -157,6 +181,12 @@ async def http_run_dockerimage(
 
     # Read docker image bytes
     docker_image_bytes = await docker_image.read()
+    if len(docker_image_bytes) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            413,
+            f"Docker image too large (>{MAX_IMAGE_SIZE // (1024*1024)}MB). Limit is 600MB.",
+        )
+
     try:
         run_params_dict = json.loads(run_params)
     except Exception:
@@ -165,21 +195,80 @@ async def http_run_dockerimage(
     if not docker_image_bytes:
         raise HTTPException(400, "Missing or empty docker_image upload")
 
-    # create job
+    alive = {
+        aid: ag
+        for aid, ag in agents.items()
+        if time.time() - ag.last_seen < STALE_AGENT_TIMEOUT
+    }
+    if not alive:
+        raise HTTPException(503, "No available agents")
+
+    # Check manifest and config for os and arch
+    try:
+        with tarfile.open(fileobj=BytesIO(docker_image_bytes), mode="r:*") as tar:
+            manifest_file = tar.extractfile("manifest.json")
+            if manifest_file is None:
+                raise HTTPException(400, "manifest.json not found in Docker image")
+
+            manifest = json.loads(manifest_file.read())
+            if not manifest or not isinstance(manifest, list):
+                raise HTTPException(400, "Invalid Docker image manifest")
+
+            image_info = manifest[0]
+            config_filename = image_info.get("Config")
+            if not config_filename:
+                raise HTTPException(
+                    400, "Config filename not found in Docker image manifest"
+                )
+
+            config_file = tar.extractfile(config_filename)
+            if config_file is None:
+                raise HTTPException(
+                    400, f"Config file {config_filename} not found in Docker image"
+                )
+
+            config_json = json.loads(config_file.read())
+            print("mama", config_json)
+            manifest_os = config_json.get("os")
+            manifest_arch = config_json.get("architecture")
+            if not manifest_os or not manifest_arch:
+                raise HTTPException(
+                    400, "Missing os or architecture in Docker image config"
+                )
+    except Exception as e:
+        raise HTTPException(400, f"Failed to read Docker image manifest/config: {e}")
+
+    # If not agents with platform info, ask the user to build with --platform of available agents
+    agents_with_matching_platform = [
+        ag
+        for ag in alive.values()
+        if ag.platform.os == manifest_os and ag.platform.arch == manifest_arch
+    ]
+    if not agents_with_matching_platform:
+        available = [
+            f"{ag.hostname} (os={ag.platform.os}, arch={ag.platform.arch})"
+            for ag in alive.values()
+        ]
+        raise HTTPException(
+            400,
+            f"Please build the image with --platform of one of the available agents: {', '.join(available)}",
+        )
+
+    # Create job
     job = JobInfo(
         dockerfile="", run_params=run_params_dict, docker_image=docker_image_bytes
     )
 
-    # pick best agent
-    alive = {aid: ag for aid, ag in agents.items() if time.time() - ag.last_seen < 60}
-    if not alive:
-        raise HTTPException(503, "No available agents")
-    best = min(alive.values(), key=lambda a: len(a.running_containers))
+    # Pick best agent based on running containers and less cpu/mem usage
+    best = min(
+        agents_with_matching_platform,
+        key=lambda a: (len(a.running_containers), a.cpu_percent, a.mem_percent),
+    )
 
     job.agent_id = best.id
     jobs[job.job_id] = job
 
-    # enqueue job assignment over gRPC
+    # Enqueue job assignment over gRPC
     assignment = pb.OrchestratorMessage(
         job_assignment=pb.JobAssignment(
             job_id=job.job_id,
@@ -243,4 +332,7 @@ async def http_get_logs(job_id: str):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+    host = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
+    port = int(ORCHESTRATOR_HTTP.split(":")[-1])
+    logger.info(f"Starting HTTP server on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="info")
