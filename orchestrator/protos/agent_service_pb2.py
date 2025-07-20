@@ -24,37 +24,37 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1aprotos/agent_service.proto\x12\x05\x61gent\"d\n\tHeartbeat\x12\x11\n\ttimestamp\x18\x01 \x01(\x03\x12\x1a\n\x12running_containers\x18\x02 \x03(\t\x12\x13\n\x0b\x63pu_percent\x18\x03 \x01(\x02\x12\x13\n\x0bmem_percent\x18\x04 \x01(\x02\"\x89\x02\n\rJobAssignment\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x12\n\ndockerfile\x18\x02 \x01(\t\x12\x37\n\nbuild_args\x18\x03 \x03(\x0b\x32#.agent.JobAssignment.BuildArgsEntry\x12\x37\n\nrun_params\x18\x04 \x03(\x0b\x32#.agent.JobAssignment.RunParamsEntry\x1a\x30\n\x0e\x42uildArgsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\x1a\x30\n\x0eRunParamsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xa8\x01\n\tJobResult\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\'\n\x06status\x18\x02 \x01(\x0e\x32\x17.agent.JobResult.Status\x12\x14\n\x0c\x63ontainer_id\x18\x03 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x04 \x01(\t\"<\n\x06Status\x12\x0b\n\x07PENDING\x10\x00\x12\x0b\n\x07RUNNING\x10\x01\x12\x0c\n\x08\x46INISHED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\"\x1c\n\nLogRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\".\n\x0bLogResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\x94\x01\n\x0c\x41gentMessage\x12%\n\theartbeat\x18\x01 \x01(\x0b\x32\x10.agent.HeartbeatH\x00\x12&\n\njob_result\x18\x02 \x01(\x0b\x32\x10.agent.JobResultH\x00\x12*\n\x0clog_response\x18\x03 \x01(\x0b\x32\x12.agent.LogResponseH\x00\x42\t\n\x07payload\"z\n\x13OrchestratorMessage\x12.\n\x0ejob_assignment\x18\x01 \x01(\x0b\x32\x14.agent.JobAssignmentH\x00\x12(\n\x0blog_request\x18\x02 \x01(\x0b\x32\x11.agent.LogRequestH\x00\x42\t\n\x07payload2R\n\x0c\x41gentService\x12\x42\n\x0b\x43ommunicate\x12\x13.agent.AgentMessage\x1a\x1a.agent.OrchestratorMessage(\x01\x30\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1aprotos/agent_service.proto\x12\x05\x61gent\"d\n\tHeartbeat\x12\x11\n\ttimestamp\x18\x01 \x01(\x03\x12\x1a\n\x12running_containers\x18\x02 \x03(\t\x12\x13\n\x0b\x63pu_percent\x18\x03 \x01(\x02\x12\x13\n\x0bmem_percent\x18\x04 \x01(\x02\"\xa8\x01\n\tJobResult\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\'\n\x06status\x18\x02 \x01(\x0e\x32\x17.agent.JobResult.Status\x12\x14\n\x0c\x63ontainer_id\x18\x03 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x04 \x01(\t\"<\n\x06Status\x12\x0b\n\x07PENDING\x10\x00\x12\x0b\n\x07RUNNING\x10\x01\x12\x0c\n\x08\x46INISHED\x10\x02\x12\n\n\x06\x46\x41ILED\x10\x03\".\n\x0bLogResponse\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\"\xa0\x01\n\rJobAssignment\x12\x0e\n\x06job_id\x18\x01 \x01(\t\x12\x14\n\x0c\x64ocker_image\x18\x02 \x01(\x0c\x12\x37\n\nrun_params\x18\x03 \x03(\x0b\x32#.agent.JobAssignment.RunParamsEntry\x1a\x30\n\x0eRunParamsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\x1c\n\nLogRequest\x12\x0e\n\x06job_id\x18\x01 \x01(\t\"\x16\n\x03\x41\x63k\x12\x0f\n\x07message\x18\x01 \x01(\t\"&\n\x05\x45rror\x12\x0c\n\x04\x63ode\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\"\xce\x01\n\x0c\x41gentMessage\x12%\n\theartbeat\x18\x01 \x01(\x0b\x32\x10.agent.HeartbeatH\x00\x12&\n\njob_result\x18\x02 \x01(\x0b\x32\x10.agent.JobResultH\x00\x12*\n\x0clog_response\x18\x03 \x01(\x0b\x32\x12.agent.LogResponseH\x00\x12\x19\n\x03\x61\x63k\x18\x04 \x01(\x0b\x32\n.agent.AckH\x00\x12\x1d\n\x05\x65rror\x18\x05 \x01(\x0b\x32\x0c.agent.ErrorH\x00\x42\t\n\x07payload\"\xb4\x01\n\x13OrchestratorMessage\x12.\n\x0ejob_assignment\x18\x01 \x01(\x0b\x32\x14.agent.JobAssignmentH\x00\x12(\n\x0blog_request\x18\x02 \x01(\x0b\x32\x11.agent.LogRequestH\x00\x12\x19\n\x03\x61\x63k\x18\x03 \x01(\x0b\x32\n.agent.AckH\x00\x12\x1d\n\x05\x65rror\x18\x04 \x01(\x0b\x32\x0c.agent.ErrorH\x00\x42\t\n\x07payload2R\n\x0c\x41gentService\x12\x42\n\x0b\x43ommunicate\x12\x13.agent.AgentMessage\x1a\x1a.agent.OrchestratorMessage(\x01\x30\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'protos.agent_service_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_JOBASSIGNMENT_BUILDARGSENTRY']._loaded_options = None
-  _globals['_JOBASSIGNMENT_BUILDARGSENTRY']._serialized_options = b'8\001'
   _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._loaded_options = None
   _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._serialized_options = b'8\001'
   _globals['_HEARTBEAT']._serialized_start=37
   _globals['_HEARTBEAT']._serialized_end=137
-  _globals['_JOBASSIGNMENT']._serialized_start=140
-  _globals['_JOBASSIGNMENT']._serialized_end=405
-  _globals['_JOBASSIGNMENT_BUILDARGSENTRY']._serialized_start=307
-  _globals['_JOBASSIGNMENT_BUILDARGSENTRY']._serialized_end=355
-  _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._serialized_start=357
-  _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._serialized_end=405
-  _globals['_JOBRESULT']._serialized_start=408
-  _globals['_JOBRESULT']._serialized_end=576
-  _globals['_JOBRESULT_STATUS']._serialized_start=516
-  _globals['_JOBRESULT_STATUS']._serialized_end=576
-  _globals['_LOGREQUEST']._serialized_start=578
-  _globals['_LOGREQUEST']._serialized_end=606
-  _globals['_LOGRESPONSE']._serialized_start=608
-  _globals['_LOGRESPONSE']._serialized_end=654
-  _globals['_AGENTMESSAGE']._serialized_start=657
-  _globals['_AGENTMESSAGE']._serialized_end=805
-  _globals['_ORCHESTRATORMESSAGE']._serialized_start=807
-  _globals['_ORCHESTRATORMESSAGE']._serialized_end=929
-  _globals['_AGENTSERVICE']._serialized_start=931
-  _globals['_AGENTSERVICE']._serialized_end=1013
+  _globals['_JOBRESULT']._serialized_start=140
+  _globals['_JOBRESULT']._serialized_end=308
+  _globals['_JOBRESULT_STATUS']._serialized_start=248
+  _globals['_JOBRESULT_STATUS']._serialized_end=308
+  _globals['_LOGRESPONSE']._serialized_start=310
+  _globals['_LOGRESPONSE']._serialized_end=356
+  _globals['_JOBASSIGNMENT']._serialized_start=359
+  _globals['_JOBASSIGNMENT']._serialized_end=519
+  _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._serialized_start=471
+  _globals['_JOBASSIGNMENT_RUNPARAMSENTRY']._serialized_end=519
+  _globals['_LOGREQUEST']._serialized_start=521
+  _globals['_LOGREQUEST']._serialized_end=549
+  _globals['_ACK']._serialized_start=551
+  _globals['_ACK']._serialized_end=573
+  _globals['_ERROR']._serialized_start=575
+  _globals['_ERROR']._serialized_end=613
+  _globals['_AGENTMESSAGE']._serialized_start=616
+  _globals['_AGENTMESSAGE']._serialized_end=822
+  _globals['_ORCHESTRATORMESSAGE']._serialized_start=825
+  _globals['_ORCHESTRATORMESSAGE']._serialized_end=1005
+  _globals['_AGENTSERVICE']._serialized_start=1007
+  _globals['_AGENTSERVICE']._serialized_end=1089
 # @@protoc_insertion_point(module_scope)

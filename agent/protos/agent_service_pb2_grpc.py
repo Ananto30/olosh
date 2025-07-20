@@ -26,7 +26,30 @@ if _version_not_supported:
 
 
 class AgentServiceStub(object):
-    """Missing associated documentation comment in .proto file."""
+    """===============================
+    AgentService: Bidirectional Streaming
+    ===============================
+    This service defines a single bidirectional streaming RPC, Communicate.
+
+    - The agent always acts as the gRPC client and initiates the connection to the orchestrator (server).
+    - Both agent and orchestrator can send messages at any time over the stream.
+    - This design avoids firewall issues, as only the agent makes outbound connections.
+    - All communication (heartbeats, job assignments, results, logs, errors, etc.) is multiplexed over this single stream.
+
+    Benefits of a single streaming RPC:
+    * Simpler connection management (one persistent stream per agent)
+    * Real-time, low-latency, bidirectional communication
+    * Easy to extend with new message types (just add to the envelope messages)
+    * No need for the agent to run a server or open ports
+    * Supports both push and pull patterns
+
+    Cons of a single streaming RPC:
+    * Harder to debug and monitor individual message types (all are multiplexed on one stream)
+    * If the stream breaks, all communication is interrupted (no isolation between message types)
+    * More complex client/server logic to handle message routing and state
+    * Not as straightforward to implement request/response patterns as with unary RPCs
+    * Backpressure or slow consumers can affect all message types on the stream
+    """
 
     def __init__(self, channel):
         """Constructor.
@@ -42,10 +65,33 @@ class AgentServiceStub(object):
 
 
 class AgentServiceServicer(object):
-    """Missing associated documentation comment in .proto file."""
+    """===============================
+    AgentService: Bidirectional Streaming
+    ===============================
+    This service defines a single bidirectional streaming RPC, Communicate.
+
+    - The agent always acts as the gRPC client and initiates the connection to the orchestrator (server).
+    - Both agent and orchestrator can send messages at any time over the stream.
+    - This design avoids firewall issues, as only the agent makes outbound connections.
+    - All communication (heartbeats, job assignments, results, logs, errors, etc.) is multiplexed over this single stream.
+
+    Benefits of a single streaming RPC:
+    * Simpler connection management (one persistent stream per agent)
+    * Real-time, low-latency, bidirectional communication
+    * Easy to extend with new message types (just add to the envelope messages)
+    * No need for the agent to run a server or open ports
+    * Supports both push and pull patterns
+
+    Cons of a single streaming RPC:
+    * Harder to debug and monitor individual message types (all are multiplexed on one stream)
+    * If the stream breaks, all communication is interrupted (no isolation between message types)
+    * More complex client/server logic to handle message routing and state
+    * Not as straightforward to implement request/response patterns as with unary RPCs
+    * Backpressure or slow consumers can affect all message types on the stream
+    """
 
     def Communicate(self, request_iterator, context):
-        """Bidirectional streaming RPC: agent sends AgentMessage, receives OrchestratorMessage
+        """Bidirectional streaming RPC for all agent-orchestrator communication.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -68,7 +114,30 @@ def add_AgentServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class AgentService(object):
-    """Missing associated documentation comment in .proto file."""
+    """===============================
+    AgentService: Bidirectional Streaming
+    ===============================
+    This service defines a single bidirectional streaming RPC, Communicate.
+
+    - The agent always acts as the gRPC client and initiates the connection to the orchestrator (server).
+    - Both agent and orchestrator can send messages at any time over the stream.
+    - This design avoids firewall issues, as only the agent makes outbound connections.
+    - All communication (heartbeats, job assignments, results, logs, errors, etc.) is multiplexed over this single stream.
+
+    Benefits of a single streaming RPC:
+    * Simpler connection management (one persistent stream per agent)
+    * Real-time, low-latency, bidirectional communication
+    * Easy to extend with new message types (just add to the envelope messages)
+    * No need for the agent to run a server or open ports
+    * Supports both push and pull patterns
+
+    Cons of a single streaming RPC:
+    * Harder to debug and monitor individual message types (all are multiplexed on one stream)
+    * If the stream breaks, all communication is interrupted (no isolation between message types)
+    * More complex client/server logic to handle message routing and state
+    * Not as straightforward to implement request/response patterns as with unary RPCs
+    * Backpressure or slow consumers can affect all message types on the stream
+    """
 
     @staticmethod
     def Communicate(request_iterator,

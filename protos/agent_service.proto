@@ -1,58 +1,118 @@
 syntax = "proto3";
 package agent;
 
+// ===============================
+// AgentService: Bidirectional Streaming
+// ===============================
+// This service defines a single bidirectional streaming RPC, Communicate.
+//
+// - The agent always acts as the gRPC client and initiates the connection to the orchestrator (server).
+// - Both agent and orchestrator can send messages at any time over the stream.
+// - This design avoids firewall issues, as only the agent makes outbound connections.
+// - All communication (heartbeats, job assignments, results, logs, errors, etc.) is multiplexed over this single stream.
+//
+// Benefits of a single streaming RPC:
+//   * Simpler connection management (one persistent stream per agent)
+//   * Real-time, low-latency, bidirectional communication
+//   * Easy to extend with new message types (just add to the envelope messages)
+//   * No need for the agent to run a server or open ports
+//   * Supports both push and pull patterns
+//
+// Cons of a single streaming RPC:
+//   * Harder to debug and monitor individual message types (all are multiplexed on one stream)
+//   * If the stream breaks, all communication is interrupted (no isolation between message types)
+//   * More complex client/server logic to handle message routing and state
+//   * Not as straightforward to implement request/response patterns as with unary RPCs
+//   * Backpressure or slow consumers can affect all message types on the stream
 service AgentService {
-  // Bidirectional streaming RPC: agent sends AgentMessage, receives OrchestratorMessage
+  // Bidirectional streaming RPC for all agent-orchestrator communication.
   rpc Communicate(stream AgentMessage) returns (stream OrchestratorMessage);
 }
 
+// ===============================
+// Agent -> Orchestrator Messages
+// ===============================
+
+// Periodic heartbeat sent by the agent to report status and resource usage.
 message Heartbeat {
-  int64 timestamp = 1;
-  repeated string running_containers = 2;
-  float cpu_percent = 3;
-  float mem_percent = 4;
+  int64 timestamp = 1;                    // Unix timestamp (ms)
+  repeated string running_containers = 2; // List of currently running container IDs
+  float cpu_percent = 3;                  // Agent's CPU usage (%)
+  float mem_percent = 4;                  // Agent's memory usage (%)
 }
 
-message JobAssignment {
-  string job_id = 1;
-  string dockerfile = 2;
-  map<string, string> build_args = 3;
-  map<string, string> run_params = 4;
-}
-
+// Result of a job executed by the agent.
 message JobResult {
-  string job_id = 1;
+  string job_id = 1;                      // Job identifier
   enum Status {
     PENDING = 0;
     RUNNING = 1;
     FINISHED = 2;
     FAILED = 3;
   }
-  Status status = 2;
-  string container_id = 3;
-  string detail = 4;
+  Status status = 2;                      // Current status of the job
+  string container_id = 3;                // Docker container ID (if applicable)
+  string detail = 4;                      // Additional details or error messages
 }
 
-message LogRequest {
-  string job_id = 1;
-}
-
+// Response to a log request, containing log content for a job.
 message LogResponse {
-  string job_id = 1;
-  string content = 2;
+  string job_id = 1;                      // Job identifier
+  string content = 2;                     // Log content (may be partial or full)
 }
 
+// ===============================
+// Orchestrator -> Agent Messages
+// ===============================
+
+// Assignment of a new job to the agent.
+message JobAssignment {
+  string job_id = 1;                      // Job identifier
+  bytes docker_image = 2;                 // Docker image as a binary buffer (tarball or OCI image)
+  map<string, string> run_params = 3;     // Parameters for running the container
+}
+
+// Request for logs of a specific job.
+message LogRequest {
+  string job_id = 1;                      // Job identifier
+}
+
+// ===============================
+// Generic Acknowledgement & Error
+// ===============================
+
+// Generic acknowledgement message for successful operations.
+message Ack {
+  string message = 1;                     // Human-readable acknowledgement
+}
+
+// Generic error message for reporting failures.
+message Error {
+  string code = 1;                        // Error code (optional)
+  string message = 2;                     // Error description
+}
+
+// ===============================
+// Envelope Messages (oneof payload)
+// ===============================
+
+// All messages sent from agent to orchestrator are wrapped in this envelope.
 message AgentMessage {
   oneof payload {
-    Heartbeat heartbeat = 1;
-    JobResult job_result = 2;
-    LogResponse log_response = 3;
+    Heartbeat heartbeat = 1;              // Agent status update
+    JobResult job_result = 2;             // Job execution result
+    LogResponse log_response = 3;         // Log data for a job
+    Ack ack = 4;                          // Acknowledgement
+    Error error = 5;                      // Error report
   }
 }
 
+// All messages sent from orchestrator to agent are wrapped in this envelope.
 message OrchestratorMessage {
   oneof payload {
-    JobAssignment job_assignment = 1;
-    LogRequest log_request = 2;
+    JobAssignment job_assignment = 1;     // Assign a new job
+    LogRequest log_request = 2;           // Request logs for a job
+    Ack ack = 3;                          // Acknowledgement
+    Error error = 4;                      // Error report
   }
 }

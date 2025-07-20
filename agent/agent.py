@@ -108,30 +108,20 @@ def handle_responses(stream):
 
 def run_job(job: pb.JobAssignment):
     job_id = job.job_id
-    # Build image
-    tar_stream = io.BytesIO()
-    with tarfile.open(fileobj=tar_stream, mode="w") as tar:
-        df_bytes = job.dockerfile.encode("utf-8")
-        info = tarfile.TarInfo(name="Dockerfile")
-        info.size = len(df_bytes)
-        tar.addfile(info, io.BytesIO(df_bytes))
-    tar_stream.seek(0)
-
+    # Load docker image from bytes
     try:
-        image, _ = docker_client.images.build(
-            fileobj=tar_stream,
-            custom_context=True,
-            tag=f"{HOSTNAME}-{job_id}",
-            buildargs=job.build_args,
-        )
-        logger.info(f"Job {job_id}: build succeeded")
+        image_stream = io.BytesIO(job.docker_image)
+        load_result = docker_client.images.load(image_stream.read())
+        # load() returns a list of images, use the first one
+        image = load_result[0]
+        logger.info(f"Job {job_id}: docker image loaded: {image.id}")
     except Exception as e:
-        logger.error(f"Job {job_id}: build failed: {e}")
+        logger.error(f"Job {job_id}: failed to load docker image: {e}")
         result = pb.JobResult(
             job_id=job_id,
             status=pb.JobResult.FAILED,
             container_id="",
-            detail=str(e),
+            detail=f"Failed to load docker image: {e}",
         )
         message_queue.put(pb.AgentMessage(job_result=result))
         return
@@ -243,7 +233,13 @@ def main():
             agent_id = register_agent()
             metadata = [("agent-id", agent_id)]
 
-            channel = grpc.insecure_channel(ORCHESTRATOR_GRPC)
+            channel = grpc.insecure_channel(
+                ORCHESTRATOR_GRPC,
+                options=[
+                    ("grpc.max_send_message_length", 100 * 1024 * 1024),
+                    ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+                ],
+            )
             stub = grpc_pb.AgentServiceStub(channel)
             stream = stub.Communicate(message_generator(), metadata=metadata)
 

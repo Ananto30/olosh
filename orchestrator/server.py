@@ -1,9 +1,5 @@
-# orchestrator.py
-# ------------------
-# Orchestrator with HTTP API (FastAPI) and gRPC server (grpc.aio).
-# HTTP on port 8000; gRPC on port 50051.
-
 import asyncio
+import json
 import logging
 import os
 import time
@@ -15,9 +11,15 @@ import grpc.aio
 import protos.agent_service_pb2 as pb
 import protos.agent_service_pb2_grpc as grpc_pb
 from agent_service import AgentService
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
+
+# orchestrator.py
+# ------------------
+# Orchestrator with HTTP API (FastAPI) and gRPC server (grpc.aio).
+# HTTP on port 8000; gRPC on port 50051.
+
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -30,30 +32,6 @@ class AgentRegistration(BaseModel):
     cpu: int
     mem: int
     labels: List[str]
-
-
-class HeartbeatPayload(BaseModel):
-    timestamp: int
-    running_containers: List[str]
-    cpu_percent: float = 0.0
-    mem_percent: float = 0.0
-
-
-class RunDockerfileRequest(BaseModel):
-    dockerfile: str
-    build_args: Optional[Dict[str, str]] = {}
-    run_params: Optional[Dict] = {}
-
-
-class JobResultPayload(BaseModel):
-    job_id: str
-    status: int
-    container_id: str
-    detail: str
-
-
-class LogRequestPayload(BaseModel):
-    job_id: str
 
 
 class Agent(BaseModel):
@@ -81,8 +59,8 @@ class Agent(BaseModel):
 class JobInfo(BaseModel):
     job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     dockerfile: str
-    build_args: Dict[str, str]
     run_params: Dict
+    docker_image: Optional[bytes] = None
     status: str = "pending"
     agent_id: Optional[str] = None
     container_id: Optional[str] = None
@@ -101,7 +79,12 @@ log_waiters: Dict[str, asyncio.Queue] = {}
 
 # ─── gRPC SERVER STARTUP ───────────────────────────────────────────────────────
 async def serve_grpc():
-    server = grpc.aio.server()
+    server = grpc.aio.server(
+        options=[
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+        ]
+    )
     grpc_pb.add_AgentServiceServicer_to_server(
         AgentService(agents, jobs, log_waiters), server
     )
@@ -161,31 +144,31 @@ def http_list_agents():
     }
 
 
-@app.post("/run-dockerfile")
-async def http_run(request: Request):
+@app.post("/run-dockerimage")
+async def http_run_dockerimage(
+    docker_image: UploadFile = File(...), run_params: str = Form("{}")
+):
     """
-    Submit a Dockerfile job.
-    Accepts either JSON body:
-      { "dockerfile": "...", "build_args": {...}, "run_params": {...} }
-    or HTML form data with a 'dockerfile' field.
+    Submit a Docker image tarball (as produced by `docker save`).
+    Accepts multipart/form-data with fields:
+      - docker_image: file upload (tarball)
+      - run_params: JSON string (optional)
     """
-    content_type = request.headers.get("content-type", "")
-    if content_type.startswith("application/json"):
-        data = await request.json()
-        dockerfile = data.get("dockerfile")
-        build_args = data.get("build_args", {}) or {}
-        run_params = data.get("run_params", {}) or {}
-    else:
-        form = await request.form()
-        dockerfile = form.get("dockerfile")
-        build_args = {}
-        run_params = {}
 
-    if not dockerfile:
-        raise HTTPException(400, "Missing 'dockerfile'")
+    # Read docker image bytes
+    docker_image_bytes = await docker_image.read()
+    try:
+        run_params_dict = json.loads(run_params)
+    except Exception:
+        run_params_dict = {}
+
+    if not docker_image_bytes:
+        raise HTTPException(400, "Missing or empty docker_image upload")
 
     # create job
-    job = JobInfo(dockerfile=dockerfile, build_args=build_args, run_params=run_params)
+    job = JobInfo(
+        dockerfile="", run_params=run_params_dict, docker_image=docker_image_bytes
+    )
 
     # pick best agent
     alive = {aid: ag for aid, ag in agents.items() if time.time() - ag.last_seen < 60}
@@ -200,8 +183,7 @@ async def http_run(request: Request):
     assignment = pb.OrchestratorMessage(
         job_assignment=pb.JobAssignment(
             job_id=job.job_id,
-            dockerfile=job.dockerfile,
-            build_args=job.build_args,
+            docker_image=docker_image_bytes,
             run_params={k: str(v) for k, v in job.run_params.items()},
         )
     )
@@ -213,17 +195,23 @@ async def http_run(request: Request):
 
 @app.get("/jobs")
 def http_list_jobs():
-    if not jobs:
-        return PlainTextResponse("No jobs submitted.")
-    lines = []
-    for j in jobs.values():
-        line = f"{j.job_id}: agent={j.agent_id}, status={j.status}"
-        if j.status in ("finished", "failed"):
-            line += f", container={j.container_id}"
-            if j.status == "failed":
-                line += f", detail={j.detail.splitlines()[0]}"
-        lines.append(line)
-    return PlainTextResponse("\n".join(lines))
+    """
+    Return all jobs as JSON.
+    """
+    return {
+        "jobs": [
+            {
+                "job_id": j.job_id,
+                "agent_id": j.agent_id,
+                "status": j.status,
+                "container_id": j.container_id,
+                "detail": j.detail,
+                "created": j.created,
+                "updated": j.updated,
+            }
+            for j in jobs.values()
+        ]
+    }
 
 
 @app.get("/jobs/{job_id}/logs")
@@ -250,20 +238,6 @@ async def http_get_logs(job_id: str):
         raise HTTPException(504, "Timeout waiting for logs")
     finally:
         del log_waiters[job_id]
-
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return HTMLResponse(
-        """
-<html><body>
-<h1>Submit Dockerfile</h1>
-<form action='/run-dockerfile' method='post'>
-<textarea name='dockerfile' rows='20' cols='80'></textarea><br/>
-<input type='submit' value='Run'>
-</form>
-</body></html>"""
-    )
 
 
 if __name__ == "__main__":
