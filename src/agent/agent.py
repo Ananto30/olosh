@@ -42,7 +42,7 @@ HOSTNAME = os.getenv("HOSTNAME", f"agent-{uuid.uuid4().hex[:8]}")
 PODMAN_SOCK = os.getenv("PODMAN_SOCK", "unix:///run/podman/podman.sock")
 
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
-HEARTBEAT_INTERVAL = 10  # seconds
+HEARTBEAT_INTERVAL = 5  # seconds
 TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
 
 

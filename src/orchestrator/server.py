@@ -15,12 +15,13 @@ from typing import Dict, List, Optional
 
 import grpc
 import grpc.aio
-import protos.agent_service_pb2 as pb
-import protos.agent_service_pb2_grpc as grpc_pb
 from agent_service import AgentService
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, PrivateAttr
+
+import protos.agent_service_pb2 as pb
+import protos.agent_service_pb2_grpc as grpc_pb
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -31,7 +32,7 @@ ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://0.0.0.0:8000")
 ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", "0.0.0.0:50051")
 
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
-STALE_AGENT_TIMEOUT = 60  # seconds
+STALE_AGENT_TIMEOUT = 15  # seconds
 
 
 # ─── DATA MODELS ───────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ async def serve_grpc():
 # ─── BACKGROUND TASKS ────────────────────────────────────────────────────────────
 async def cleanup_agents():
     while True:
-        await asyncio.sleep(20)
+        await asyncio.sleep(5)
         now = time.time()
         stale = [
             aid
@@ -127,11 +128,24 @@ async def cleanup_agents():
             logger.info(f"Removed stale agent {aid}")
 
 
+# Scheduler to mark jobs as failed if their agent is missing
+async def job_agent_checker():
+    while True:
+        await asyncio.sleep(5)
+        for job in jobs.values():
+            if job.agent_id and job.status == "pending" and job.agent_id not in agents:
+                job.status = "failed"
+                job.detail = "agent died"
+                job.updated = time.time()
+
+
 # ─── FASTAPI HTTP APP ──────────────────────────────────────────────────────────
+
 app = FastAPI(
     on_startup=[
         lambda: asyncio.create_task(serve_grpc()),
         lambda: asyncio.create_task(cleanup_agents()),
+        lambda: asyncio.create_task(job_agent_checker()),
     ]
 )
 
@@ -281,7 +295,8 @@ async def http_run_dockerimage(
     agents_with_matching_platform = [
         ag
         for ag in alive.values()
-        if ag.platform.os == manifest_os and ag.platform.arch == manifest_arch
+        if ag.platform.os == "darwin"
+        or (ag.platform.os == manifest_os and ag.platform.arch == manifest_arch)
     ]
     if not agents_with_matching_platform:
         available = [

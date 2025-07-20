@@ -86,7 +86,7 @@ def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
     try:
         resp.raise_for_status()
         return resp.json()
-    except httpx.RequestError as e:
+    except (httpx.RequestError, httpx.HTTPStatusError) as e:
         print(
             f"Error pushing docker image: {e} | {getattr(resp, 'text', '')}",
             file=sys.stderr,
