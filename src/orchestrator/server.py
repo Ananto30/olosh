@@ -4,10 +4,10 @@
 # HTTP on port 8000; gRPC on port 50051.
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
-import tarfile
 import tempfile
 import time
 import uuid
@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 import src.protos.agent_service_pb2 as pb
 import src.protos.agent_service_pb2_grpc as grpc_pb
 from src.orchestrator.agent_service import AgentService
+from src.orchestrator.image_utils import extract_manifest_config
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -250,45 +251,15 @@ async def http_run_dockerimage(
         os.remove(temp_path)
         raise HTTPException(503, "No available agents")
 
-    # Check manifest and config for os and arch
-    try:
-        with tarfile.open(temp_path, mode="r:*") as tar:
-            manifest_file = tar.extractfile("manifest.json")
-            if manifest_file is None:
-                os.remove(temp_path)
-                raise HTTPException(400, "manifest.json not found in Docker image")
-
-            manifest = json.loads(manifest_file.read())
-            if not manifest or not isinstance(manifest, list):
-                os.remove(temp_path)
-                raise HTTPException(400, "Invalid Docker image manifest")
-
-            image_info = manifest[0]
-            config_filename = image_info.get("Config")
-            if not config_filename:
-                os.remove(temp_path)
-                raise HTTPException(
-                    400, "Config filename not found in Docker image manifest"
-                )
-
-            config_file = tar.extractfile(config_filename)
-            if config_file is None:
-                os.remove(temp_path)
-                raise HTTPException(
-                    400, f"Config file {config_filename} not found in Docker image"
-                )
-
-            config_json = json.loads(config_file.read())
-            manifest_os = config_json.get("os")
-            manifest_arch = config_json.get("architecture")
-            if not manifest_os or not manifest_arch:
-                os.remove(temp_path)
-                raise HTTPException(
-                    400, "Missing os or architecture in Docker image config"
-                )
-    except Exception as e:
+    # Check manifest and config for os and arch using multiprocessing and decoupled logic
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ProcessPoolExecutor() as pool:
+        manifest_os, manifest_arch, manifest_err = await loop.run_in_executor(
+            pool, extract_manifest_config, temp_path
+        )
+    if manifest_err:
         os.remove(temp_path)
-        raise HTTPException(400, f"Failed to read Docker image manifest/config: {e}")
+        raise HTTPException(400, manifest_err)
 
     # If not agents with platform info, ask the user to build with --platform of available agents
     agents_with_matching_platform = [
