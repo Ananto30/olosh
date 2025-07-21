@@ -9,7 +9,8 @@ import src.protos.agent_service_pb2 as pb
 import src.protos.agent_service_pb2_grpc as grpc_pb
 
 if TYPE_CHECKING:
-    from src.orchestrator.server import Agent, JobInfo
+    from src.orchestrator.agent__handler import Agent
+    from src.orchestrator.job__handler import JobInfo
 
 logger = logging.getLogger("orchestrator")
 
@@ -62,8 +63,9 @@ class AgentService(grpc_pb.AgentServiceServicer):
     ) -> None:
         agent.last_seen = hb.timestamp
         agent.running_containers = list(hb.running_containers)
-        agent.cpu_percent = getattr(hb, "cpu_percent", 0.0)
-        agent.mem_percent = getattr(hb, "mem_percent", 0.0)
+        cpu_percent = getattr(hb, "cpu_percent", 0.0)
+        mem_percent = getattr(hb, "mem_percent", 0.0)
+        agent.update_heartbeat(cpu_percent, mem_percent)
         # reconcile jobs
         for job in self.jobs.values():
             if job.agent_id == agent_id and job.status == "running":

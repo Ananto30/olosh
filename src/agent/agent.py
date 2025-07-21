@@ -47,11 +47,28 @@ TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
 
 # ─── LOGGER ───────────────────────────────────────────────────────────────────
 class CustomFormatter(logging.Formatter):
+    # ANSI color codes for log levels
+    COLORS = {
+        "DEBUG": "\033[36m",  # Cyan
+        "INFO": "\033[32m",  # Green
+        "WARNING": "\033[33m",  # Yellow
+        "ERROR": "\033[31m",  # Red
+        "CRITICAL": "\033[41m\033[97m",  # White on Red bg
+        "RESET": "\033[0m",
+    }
+
     def format(self, record):
         record.hostname = HOSTNAME
         record.threadName = threading.current_thread().name
         # Pad levelname to 7 chars for alignment (e.g., 'WARNING ')
-        record.levelname = f"{record.levelname:<7}"
+        level = record.levelname.strip()
+        color = self.COLORS.get(level, "")
+        reset = self.COLORS["RESET"]
+        # Color the levelname
+        record.levelname = f"{color}{level:<7}{reset}"
+        # Color the threadName and hostname for visibility
+        record.threadName = f"\033[35m{record.threadName}{reset}"  # Magenta
+        record.hostname = f"\033[34m{record.hostname}{reset}"  # Blue
         return super().format(record)
 
 

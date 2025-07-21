@@ -1,4 +1,4 @@
-from typing import Dict, List, Protocol
+from typing import Dict, List, Optional, Protocol
 
 import docker
 from podman import PodmanClient
@@ -6,47 +6,47 @@ from pydantic import BaseModel
 
 
 class Image(BaseModel):
-    id: str
+    id: Optional[str] = None
     tags: List[str] = []
 
 
 class ContainerClient(Protocol):
     def load_image(self, data: bytes) -> List[Image]:
         """Load a Docker image from bytes."""
-        pass
+        ...
 
     def run_container(
         self,
         image_id: str,
         name: str,
         **run_params,
-    ) -> str:
+    ) -> Optional[str]:
         """Run a container with the given image and parameters."""
-        pass
+        ...
 
     def get_container_logs(self, container_id: str) -> str:
         """Get logs for a specific container."""
-        pass
+        ...
 
     def get_container_status(self, container_id: str) -> str:
         """Get the status of a specific container."""
-        pass
+        ...
 
     def stop_container(self, container_id: str) -> None:
         """Stop a running container."""
-        pass
+        ...
 
     def remove_container(self, container_id: str) -> None:
         """Remove a stopped container."""
-        pass
+        ...
 
     def get_running_containers(self) -> List[str]:
         """Get a list of currently running container IDs."""
-        pass
+        ...
 
     def wait_for_exit(self, container_id: str) -> int:
         """Wait for a container to exit and return its exit info."""
-        pass
+        ...
 
 
 class DockerContainerClient(ContainerClient):
@@ -63,7 +63,7 @@ class DockerContainerClient(ContainerClient):
         image_id: str,
         name: str,
         **run_params,
-    ) -> str:
+    ) -> Optional[str]:
         """Run a container with the given image and parameters."""
         container = self.client.containers.run(
             image_id, detach=True, name=name, **run_params
@@ -114,7 +114,7 @@ class PodmanContainerClient(ContainerClient):
         image_id: str,
         name: str,
         **run_params,
-    ) -> str:
+    ) -> Optional[str]:
         """Run a container with the given image and parameters."""
         container = self.client.containers.run(
             image_id, detach=True, name=name, **run_params
