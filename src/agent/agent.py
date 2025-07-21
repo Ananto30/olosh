@@ -351,6 +351,7 @@ def main():
     while True:
         try:
             agent_id = register_agent()
+            # This is important to identify the agent
             metadata = [("agent-id", agent_id)]
 
             channel = grpc.insecure_channel(
