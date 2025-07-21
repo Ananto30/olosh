@@ -7,4 +7,6 @@ generate-protos:
 
 .PHONY: install
 install:
+	uv venv
+	uv sync
 	.venv/bin/python -m pip install -e .
