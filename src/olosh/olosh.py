@@ -26,6 +26,9 @@ def orchestrator(
     grpc_port: int = typer.Option(
         50051, help="[optional] gRPC port for orchestrator (default: 50051)"
     ),
+    tls: Optional[str] = typer.Option(
+        None, "--tls", help="[optional] Path to TLS certs for orchestrator (default: None)"
+    ),
 ):
     """
     Run the orchestrator server.
@@ -36,6 +39,8 @@ def orchestrator(
     env = os.environ.copy()
     env["ORCHESTRATOR_HTTP"] = f"http://0.0.0.0:{cli_port}"
     env["ORCHESTRATOR_GRPC"] = f"0.0.0.0:{grpc_port}"
+    if tls:
+        env["ORCHESTRATOR_TLS_CERTS"] = tls
     subprocess.run([sys.executable, "-m", "src.orchestrator.server"], env=env)
 
 

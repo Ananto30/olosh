@@ -42,8 +42,19 @@ if not ORCHESTRATOR_GRPC:
 
 AGENT_TLS_CERTS = os.getenv("AGENT_TLS_CERTS", None)
 if AGENT_TLS_CERTS:
+    # should not be a directory, but a file path to the CA cert
+    if os.path.isdir(AGENT_TLS_CERTS):
+        logger.error(
+            "AGENT_TLS_CERTS should point to ca.crt file, not a directory. Please set it to the path of the CA certificate file."
+        )
+        sys.exit(1)
     if not os.path.exists(AGENT_TLS_CERTS):
         logger.error(f"TLS certs path {AGENT_TLS_CERTS} does not exist.")
+        sys.exit(1)
+    if ".crt" not in AGENT_TLS_CERTS:
+        logger.error(
+            f"AGENT_TLS_CERTS should point to a .crt file, but got {AGENT_TLS_CERTS}."
+        )
         sys.exit(1)
 
 
@@ -326,6 +337,30 @@ arch = arch_map.get(raw_arch, raw_arch)
 
 
 def main():
+
+    # Load CA certificate for TLS from env var or default
+    if AGENT_TLS_CERTS:
+        with open(AGENT_TLS_CERTS, "rb") as f:
+            trusted_certs = f.read()
+        credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
+
+        channel = grpc.secure_channel(
+            ORCHESTRATOR_GRPC,
+            credentials,
+            options=[
+                ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
+                ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
+            ],
+        )
+    else:
+        channel = grpc.insecure_channel(
+            ORCHESTRATOR_GRPC,
+            options=[
+                ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
+                ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
+            ],
+        )
+
     while True:
         try:
             metadata = [
@@ -336,13 +371,6 @@ def main():
                 ("arch", arch),
             ]
 
-            channel = grpc.insecure_channel(
-                ORCHESTRATOR_GRPC,  # type: ignore
-                options=[
-                    ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
-                    ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
-                ],
-            )
             stub = grpc_pb.AgentServiceStub(channel)
             stream = stub.Communicate(message_generator(), metadata=metadata)
 

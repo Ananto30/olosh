@@ -1,4 +1,6 @@
 import asyncio
+import os
+import sys
 import time
 
 import grpc
@@ -32,9 +34,43 @@ async def serve_grpc():
         AgentService(agents, jobs, log_waiters), server
     )
     listen_addr = f"[::]:{ORCHESTRATOR_GRPC.split(':')[-1]}"
-    server.add_insecure_port(listen_addr)
-    await server.start()
-    logger.info(f"gRPC server listening on {listen_addr}")
+
+    try:
+        tls_certs_dir = os.getenv("ORCHESTRATOR_TLS_CERTS", None)
+        if tls_certs_dir:
+            server_crt = os.path.join(tls_certs_dir, "server.crt")
+            server_key = os.path.join(tls_certs_dir, "server.key")
+            ca_crt = os.path.join(tls_certs_dir, "ca.crt")
+
+            # check if TLS files exist
+            if not all(os.path.exists(f) for f in [server_crt, server_key, ca_crt]):
+                logger.error(
+                    "TLS files not found. Ensure server.crt, server.key, and ca.crt exist in ORCHESTRATOR_TLS_CERTS directory."
+                )
+                sys.exit(1)
+
+            with open(server_crt, "rb") as f:
+                server_cert = f.read()
+            with open(server_key, "rb") as f:
+                server_key_data = f.read()
+            with open(ca_crt, "rb") as f:
+                ca_cert = f.read()
+            server_credentials = grpc.ssl_server_credentials(
+                [(server_key_data, server_cert)],
+                root_certificates=ca_cert,
+                require_client_auth=False,  # Set to True for mutual TLS
+            )
+            server.add_secure_port(listen_addr, server_credentials)
+            await server.start()
+            logger.info(f"gRPC server (TLS) listening on {listen_addr}")
+        else:
+            server.add_insecure_port(listen_addr)
+            await server.start()
+            logger.info(f"gRPC server (INSECURE) listening on {listen_addr}")
+    except Exception as e:
+        logger.error(f"Failed to start gRPC server: {e}")
+        sys.exit(1)
+
     await server.wait_for_termination()
 
 
@@ -83,7 +119,7 @@ if __name__ == "__main__":
 
     host = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
     port = int(ORCHESTRATOR_HTTP.split(":")[-1])
-    logger.info(f"Starting HTTP server on {host}:{port}")
+    logger.info(f"Starting HTTP server on {ORCHESTRATOR_HTTP}")
 
     # Create a custom log_config for uvicorn to use our formatter and handler
 
