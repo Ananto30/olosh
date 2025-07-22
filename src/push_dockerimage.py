@@ -1,6 +1,8 @@
 import argparse
+import gzip
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -28,7 +30,6 @@ def save_docker_image(image_name, output_path):
 
 def get_container_tool():
     """Return 'docker' if available, else 'podman', else print colored error and exit."""
-    import shutil
 
     for tool in ("docker", "podman"):
         if shutil.which(tool):
@@ -44,10 +45,17 @@ def get_container_tool():
 def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
     """Push a docker image tarball to the orchestrator, showing a true network upload progress bar (using httpx)."""
     file_size = os.path.getsize(image_tar_path)
+
+    # Detect if file is gzipped by extension
+    if image_tar_path.endswith(".gz"):
+        content_type = "application/gzip"
+    else:
+        content_type = "application/x-tar"
+
     with open(image_tar_path, "rb") as f:
         # httpx requires a tuple (filename, fileobj, content_type)
         files = {
-            "docker_image": (os.path.basename(image_tar_path), f, "application/x-tar"),
+            "docker_image": (os.path.basename(image_tar_path), f, content_type),
             "run_params": (None, json.dumps(run_params or {}), "application/json"),
         }
 
@@ -76,7 +84,7 @@ def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
             files["docker_image"] = (
                 os.path.basename(image_tar_path),
                 pf,
-                "application/x-tar",
+                content_type,
             )
             with httpx.Client(timeout=None) as client:
                 resp = client.post(
@@ -92,6 +100,50 @@ def push_dockerimage(orchestrator_url, image_tar_path, run_params=None):
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def process_docker_image_upload(
+    image_name, orchestrator_url, run_params=None, tmp_path="/tmp/dockerimage.tar"
+):
+    """
+    Process a Docker image upload:
+    1. Save the image to a tarball.
+    2. Check size and gzip if larger than 500MB.
+    3. Push to orchestrator with run parameters.
+    """
+    # Save docker image
+    print(f"Saving Docker image '{image_name}' to {tmp_path} ...")
+    save_docker_image(image_name, tmp_path)
+
+    # Check size and gzip if > 500MB
+    tar_size = os.path.getsize(tmp_path)
+    upload_path = tmp_path
+    if tar_size > 500 * 1024 * 1024:
+        gz_path = tmp_path + ".gz"
+        print(
+            f"Tarball is larger than 500MB ({tar_size/1024/1024:.2f}MB). Compressing with gzip..."
+        )
+        with open(tmp_path, "rb") as f_in, gzip.GzipFile(gz_path, "wb") as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        upload_path = gz_path
+    else:
+        print(f"Tarball size is {tar_size/1024/1024:.2f}MB. No compression needed.")
+
+    # Parse run params
+    run_params = json.loads(run_params) if run_params else {}
+
+    # Push to orchestrator
+    print(f"Pushing image to orchestrator at {orchestrator_url} ...")
+    result = push_dockerimage(orchestrator_url, upload_path, run_params)
+    print("Result:")
+    print(json.dumps(result, indent=2))
+
+    # Clean up
+    for path in [tmp_path, tmp_path + ".gz"]:
+        if os.path.exists(path):
+            os.remove(path)
+
+    return result
 
 
 def main():
@@ -110,21 +162,20 @@ def main():
     )
     args = parser.parse_args()
 
-    # Save docker image
-    print(f"Saving Docker image '{args.image}' to {args.tmp} ...")
-    save_docker_image(args.image, args.tmp)
+    if not args.image:
+        parser.error("Local Docker image name or ID is required.")
+    if not args.orchestrator:
+        parser.error("Orchestrator HTTP URL is required.")
+    if not args.run_params:
+        args.run_params = "{}"
 
-    # Parse run params
-    run_params = json.loads(args.run_params) if args.run_params else {}
-
-    # Push to orchestrator
-    print(f"Pushing image to orchestrator at {args.orchestrator} ...")
-    result = push_dockerimage(args.orchestrator, args.tmp, run_params)
-    print("Result:", result)
-
-    # Clean up
-    if os.path.exists(args.tmp):
-        os.remove(args.tmp)
+    try:
+        process_docker_image_upload(
+            args.image, args.orchestrator, args.run_params, args.tmp
+        )
+    except Exception as e:
+        print(f"Error processing Docker image upload: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

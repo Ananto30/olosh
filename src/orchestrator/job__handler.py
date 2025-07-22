@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import json
 import os
 import tempfile
@@ -60,7 +61,7 @@ async def http_run_dockerimage(
         logger.info("Using /dev/shm for temp file upload")
     else:
         logger.info("Using default temp dir for upload")
-        
+
     start_time = time.time()
     if shm_dir:
         tmp = tempfile.NamedTemporaryFile(delete=False, dir=shm_dir)
@@ -130,9 +131,14 @@ async def http_run_dockerimage(
             f"Please build the image with --platform of one of the available agents: {', '.join(available)}",
         )
 
-    # Read the file back into memory for gRPC (if needed)
-    with open(temp_path, "rb") as f:
-        docker_image_bytes = f.read()
+    # Detect gzip by extension only, matching push_dockerimage.py
+    if temp_path.endswith(".gz"):
+        with gzip.open(temp_path, "rb") as f:
+            docker_image_bytes = f.read()
+        logger.info(f"Decompressed gzipped docker image upload: {temp_path}")
+    else:
+        with open(temp_path, "rb") as f:
+            docker_image_bytes = f.read()
 
     # Clean up temp file
     os.remove(temp_path)

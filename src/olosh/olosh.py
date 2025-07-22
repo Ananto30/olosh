@@ -8,7 +8,7 @@ from typing import Optional
 import httpx
 import typer
 
-from push_dockerimage import push_dockerimage, save_docker_image
+from push_dockerimage import process_docker_image_upload
 
 app = typer.Typer(
     help="Olosh: Orchestrator and Agent CLI. Use --help on any command for details.",
@@ -21,13 +21,15 @@ app = typer.Typer(
 @app.command()
 def orchestrator(
     cli_port: int = typer.Option(
-        9000, help="[required] Port to run orchestrator HTTP server on (for CLI)"
+        9000, help="[optional] Port to run orchestrator HTTP server on (for CLI)"
     ),
     grpc_port: int = typer.Option(
         50051, help="[optional] gRPC port for orchestrator (default: 50051)"
     ),
     tls: Optional[str] = typer.Option(
-        None, "--tls", help="[optional] Path to TLS certs for orchestrator (default: None)"
+        None,
+        "--tls",
+        help="[optional] Path to TLS certs for orchestrator (default: None)",
     ),
 ):
     """
@@ -53,14 +55,14 @@ def agent(
         help="[required] Orchestrator gRPC address, e.g. localhost:50051",
     ),
     tls: Optional[str] = typer.Option(
-        None, "--tls", help="[optional] Path to TLS certs for agent (default: None)"
+        None, "--tls", help="[optional] Path to TLS cert for agent (default: None)"
     ),
 ):
     """
     Run agent process.
 
     Example:
-        olosh agent --orchestrator localhost:50051 --tls /path/to/certs
+        olosh agent --orchestrator localhost:50051 --tls /path/to/ca.crt
     """
     env = os.environ.copy()
     env["ORCHESTRATOR_GRPC"] = orchestrator
@@ -95,22 +97,16 @@ def job_push(
     Example:
         olosh job push --orchestrator http://localhost:8080 myimage:latest
     """
-    tmp_tar = f"/tmp/olosh_{os.getpid()}.tar"
-    print(f"Saving Docker image '{local_docker_image}' to {tmp_tar} ...")
-
-    save_docker_image(local_docker_image, tmp_tar)
-    print(f"Pushing image to orchestrator at {orchestrator} ...")
-
-    result = push_dockerimage(orchestrator, tmp_tar)
-    print("Result:")
-    print(json.dumps(result, indent=2))
+    result = process_docker_image_upload(
+        local_docker_image,
+        orchestrator,
+        run_params=None,
+        tmp_path="/tmp/dockerimage.tar",
+    )
 
     print()
     print("To see the job status, run:")
     print(f"  olosh job status --orchestrator {orchestrator} {result['job_id']}")
-
-    if os.path.exists(tmp_tar):
-        os.remove(tmp_tar)
 
 
 @job_app.command("log")
