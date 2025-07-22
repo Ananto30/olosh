@@ -1,16 +1,14 @@
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, AsyncIterable, Dict
+from typing import AsyncIterable, Dict
 
 import grpc
 
 import src.protos.agent_service_pb2 as pb
 import src.protos.agent_service_pb2_grpc as grpc_pb
-
-if TYPE_CHECKING:
-    from src.orchestrator.agent__handler import Agent
-    from src.orchestrator.job__handler import JobInfo
+from src.orchestrator.agent__handler import Agent, AgentPlatform
+from src.orchestrator.job__handler import JobInfo
 
 logger = logging.getLogger("orchestrator")
 
@@ -33,12 +31,30 @@ class AgentService(grpc_pb.AgentServiceServicer):
     ) -> None:
         # Identify agent via metadata
         md = dict(context.invocation_metadata() or {})
-        agent_id = md.get("agent-id")
-        if not agent_id or agent_id not in self.agents:
-            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Unknown agent")
+        agent_id = str(md.get("agent-id", "")).strip()
+        if not agent_id:
+            logger.error("Agent ID not provided in metadata")
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Agent ID required")
 
-        agent = self.agents[agent_id]
-        logger.info(f"gRPC: Agent {agent_id} connected")
+        # Register
+        if agent_id not in self.agents:
+            cpu_count = md.get("cpu-count", "1")
+            mem_total = md.get("mem-total", "0")
+            os_name = str(md.get("os-name", "unknown"))
+            arch = str(md.get("arch", "unknown"))
+            agent = Agent(
+                id=agent_id,
+                cpu=int(cpu_count),
+                mem=int(mem_total),
+                labels=[],
+                platform=AgentPlatform(os=os_name, arch=arch),
+            )
+            self.agents[agent_id] = agent
+            logger.info(f"New agent registered with ID {agent_id}")
+        else:
+            # Or reconnect
+            agent = self.agents[agent_id]
+            logger.info(f"Agent {agent_id} connected")
 
         try:
             async for msg in request_iterator:
@@ -53,9 +69,9 @@ class AgentService(grpc_pb.AgentServiceServicer):
                 # We send them here after listening to the stream
                 await self.send_queued_messages(agent, context)
         except asyncio.CancelledError:
-            logger.info(f"gRPC: Agent {agent_id} disconnected")
+            logger.info(f"Agent {agent_id} disconnected")
         finally:
-            logger.info(f"gRPC: Cleanup agent {agent_id}")
+            logger.info(f"Cleanup agent {agent_id}")
             self.agents.pop(agent_id, None)
 
     async def handle_heartbeat(

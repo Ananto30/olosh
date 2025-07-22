@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import json
 import os
 import tempfile
@@ -61,6 +60,7 @@ async def http_run_dockerimage(
         logger.info("Using /dev/shm for temp file upload")
     else:
         logger.info("Using default temp dir for upload")
+        
     start_time = time.time()
     if shm_dir:
         tmp = tempfile.NamedTemporaryFile(delete=False, dir=shm_dir)
@@ -107,12 +107,7 @@ async def http_run_dockerimage(
         os.remove(temp_path)
         raise HTTPException(503, "No available agents")
 
-    # Check manifest and config for os and arch using multiprocessing and decoupled logic
-    loop = asyncio.get_event_loop()
-    with concurrent.futures.ProcessPoolExecutor() as pool:
-        manifest_os, manifest_arch, manifest_err = await loop.run_in_executor(
-            pool, extract_manifest_config, temp_path
-        )
+    manifest_os, manifest_arch, manifest_err = extract_manifest_config(temp_path)
     if manifest_err:
         os.remove(temp_path)
         raise HTTPException(400, manifest_err)

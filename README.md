@@ -36,14 +36,18 @@ This installs the `olosh` command and its dependencies.
 1. **Start the orchestrator**
 
    ```bash
-   olosh orchestrator 9000 --grpc-port 50051
+   olosh orchestrator
    ```
+
+   Starts the CLI server on port 9000 and gRPC server on port 50051. You can specify different ports using `--cli-port` and `--grpc-port` options.
 
 2. **Start an agent on another machine**
 
    ```bash
-   olosh agent --orchestrator http://<orchestrator-host>:9000
+   olosh agent --orchestrator <orchestrator-host>:50051
    ```
+
+   \**Remember this is the gRPC address of the orchestrator.*
 
 3. **Push a Docker image to run as a job**
 
@@ -71,8 +75,8 @@ Run `olosh --help` to see all options. Important commands are:
 
 | Command | Description |
 | ------- | ----------- |
-| `olosh orchestrator <port> [--grpc-port PORT]` | Start the orchestrator server. |
-| `olosh agent --orchestrator URL [--tls PATH]` | Run an agent that connects to the orchestrator. |
+| `olosh orchestrator [--cli-port PORT] [--grpc-port PORT]` | Start the orchestrator server. |
+| `olosh agent --orchestrator gRPC_URL [--tls PATH]` | Run an agent that connects to the orchestrator. |
 | `olosh job push --orchestrator URL IMAGE` | Upload a local Docker image as a job. |
 | `olosh job log --orchestrator URL JOB_ID` | Retrieve logs for a job. |
 | `olosh job status --orchestrator URL JOB_ID` | Check status of a job. |

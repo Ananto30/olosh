@@ -10,19 +10,7 @@ import typer
 
 from push_dockerimage import push_dockerimage, save_docker_image
 
-
-class OloshTyper(typer.Typer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-    def get_command(self, *args, **kwargs):
-        cmd = super().get_command(*args, **kwargs)
-        # Show help if no subcommand is provided
-        cmd.callback = typer.main.get_command_callback(cmd)
-        return cmd
-
-
-app = OloshTyper(
+app = typer.Typer(
     help="Olosh: Orchestrator and Agent CLI. Use --help on any command for details.",
     add_completion=True,
     no_args_is_help=True,
@@ -32,8 +20,8 @@ app = OloshTyper(
 
 @app.command()
 def orchestrator(
-    port: int = typer.Argument(
-        ..., help="[required] Port to run orchestrator HTTP server on"
+    cli_port: int = typer.Option(
+        9000, help="[required] Port to run orchestrator HTTP server on (for CLI)"
     ),
     grpc_port: int = typer.Option(
         50051, help="[optional] gRPC port for orchestrator (default: 50051)"
@@ -43,10 +31,10 @@ def orchestrator(
     Run the orchestrator server.
 
     Example:
-        olosh orchestrator 8080 --grpc-port 50051
+        olosh orchestrator --cli-port 9000 --grpc-port 50051
     """
     env = os.environ.copy()
-    env["ORCHESTRATOR_HTTP"] = f"http://0.0.0.0:{port}"
+    env["ORCHESTRATOR_HTTP"] = f"http://0.0.0.0:{cli_port}"
     env["ORCHESTRATOR_GRPC"] = f"0.0.0.0:{grpc_port}"
     subprocess.run([sys.executable, "-m", "src.orchestrator.server"], env=env)
 
@@ -57,7 +45,7 @@ def agent(
         ...,
         "--orchestrator",
         "-o",
-        help="[required] Orchestrator HTTP address, e.g. http://localhost:8080",
+        help="[required] Orchestrator gRPC address, e.g. localhost:50051",
     ),
     tls: Optional[str] = typer.Option(
         None, "--tls", help="[optional] Path to TLS certs for agent (default: None)"
@@ -67,14 +55,12 @@ def agent(
     Run agent process.
 
     Example:
-        olosh agent --orchestrator http://localhost:8080
+        olosh agent --orchestrator localhost:50051 --tls /path/to/certs
     """
     env = os.environ.copy()
-    env["ORCHESTRATOR_HTTP"] = orchestrator
+    env["ORCHESTRATOR_GRPC"] = orchestrator
     if tls:
         env["AGENT_TLS_CERTS"] = tls
-    # agent_dir = os.path.join(os.path.dirname(__file__), "..", "agent")
-    # subprocess.run([sys.executable, "-m", "agent"], env=env, cwd=agent_dir)
     subprocess.run([sys.executable, "-m", "src.agent.agent"], env=env)
 
 

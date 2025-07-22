@@ -1,5 +1,5 @@
+import ast
 import io
-import logging
 import os
 import platform
 import queue
@@ -7,12 +7,11 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Dict, List
+from typing import Dict, Generator, List
 
 import docker
 import grpc
 import psutil
-import requests
 from podman import PodmanClient
 
 import src.protos.agent_service_pb2 as pb
@@ -23,6 +22,7 @@ from src.agent.container_clients import (
     PodmanContainerClient,
 )
 from src.agent.utils import get_machine_agent_id
+from src.logger.common import logger
 
 try:
     import docker
@@ -33,9 +33,20 @@ except ImportError:
 
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
-ORCHESTRATOR_HTTP = os.getenv("ORCHESTRATOR_HTTP", "http://localhost:8000")
-ip = ORCHESTRATOR_HTTP.split("://")[-1].split(":")[0]
-ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", f"{ip}:50051")
+ORCHESTRATOR_GRPC = os.getenv("ORCHESTRATOR_GRPC", None)
+if not ORCHESTRATOR_GRPC:
+    logger.error(
+        "ORCHESTRATOR_GRPC environment variable is not set. Please set it to the gRPC endpoint of the orchestrator."
+    )
+    sys.exit(1)
+
+AGENT_TLS_CERTS = os.getenv("AGENT_TLS_CERTS", None)
+if AGENT_TLS_CERTS:
+    if not os.path.exists(AGENT_TLS_CERTS):
+        logger.error(f"TLS certs path {AGENT_TLS_CERTS} does not exist.")
+        sys.exit(1)
+
+
 HOSTNAME = get_machine_agent_id()
 
 PODMAN_SOCK = os.getenv("PODMAN_SOCK", "unix:///run/podman/podman.sock")
@@ -43,42 +54,6 @@ PODMAN_SOCK = os.getenv("PODMAN_SOCK", "unix:///run/podman/podman.sock")
 MAX_IMAGE_SIZE = 2000 * 1024 * 1024  # 2000MB
 HEARTBEAT_INTERVAL = 5  # seconds
 TIMEOUT_TIMER = 30 * 60  # 30 minutes per container
-
-
-# ─── LOGGER ───────────────────────────────────────────────────────────────────
-class CustomFormatter(logging.Formatter):
-    # ANSI color codes for log levels
-    COLORS = {
-        "DEBUG": "\033[36m",  # Cyan
-        "INFO": "\033[32m",  # Green
-        "WARNING": "\033[33m",  # Yellow
-        "ERROR": "\033[31m",  # Red
-        "CRITICAL": "\033[41m\033[97m",  # White on Red bg
-        "RESET": "\033[0m",
-    }
-
-    def format(self, record):
-        record.hostname = HOSTNAME
-        record.threadName = threading.current_thread().name
-        # Pad levelname to 7 chars for alignment (e.g., 'WARNING ')
-        level = record.levelname.strip()
-        color = self.COLORS.get(level, "")
-        reset = self.COLORS["RESET"]
-        # Color the levelname
-        record.levelname = f"{color}{level:<7}{reset}"
-        # Color the threadName and hostname for visibility
-        record.threadName = f"\033[35m{record.threadName}{reset}"  # Magenta
-        record.hostname = f"\033[34m{record.hostname}{reset}"  # Blue
-        return super().format(record)
-
-
-LOG_FORMAT = "[%(asctime)s] [%(levelname)s] [%(hostname)s] [%(threadName)s] %(message)s"
-handler = logging.StreamHandler()
-handler.setFormatter(CustomFormatter(LOG_FORMAT))
-logger = logging.getLogger("grpc_agent")
-logger.setLevel(logging.INFO)
-logger.handlers.clear()
-logger.addHandler(handler)
 
 
 # ─── DOCKER CLIENT ────────────────────────────────────────────────────────────
@@ -112,7 +87,7 @@ def get_container_client() -> ContainerClient:
             sock_path = sock_path[len("unix://") :]
         if not os.path.exists(sock_path):
             logger.error(
-                f"Podman socket not found at {PODMAN_SOCK} (checked path: {sock_path}). Please set PODMAN_SOCK environment variable. You can find the socket path by running 'podman info'."
+                f"Podman socket not found at {PODMAN_SOCK} (checked path: {sock_path}). Please set PODMAN_SOCK environment variable. You can find the socket path by running podman desktop -> settings -> Resources -> Podman machine -> Podman endpoint."
             )
             sys.exit(1)
 
@@ -123,9 +98,8 @@ def get_container_client() -> ContainerClient:
     except ImportError:
         logger.error("Neither docker nor podman Python packages are installed.")
     except Exception as e:
-        logger.error(
-            f"Podman not available: {e}. If you use Podman, then pass the socket path via the environment variable PODMAN_SOCK."
-        )
+        logger.error(f"Podman not available: {e}.")
+
     logger.error("No container backend (docker or podman) available. Exiting.")
     sys.exit(1)
 
@@ -143,26 +117,32 @@ lock = threading.Lock()
 message_queue: "queue.Queue[pb.AgentMessage]" = queue.Queue()
 
 
-def message_generator():
+def message_generator() -> Generator[pb.AgentMessage, None, None]:
     """
-    Yields AgentMessage instances:
-    - Heartbeat every HEARTBEAT_INTERVAL seconds
-    - JobResult or LogResponse as put into message_queue
+    Generator that yields AgentMessage instances to the orchestrator.
+    - Sends heartbeat messages at regular intervals (HEARTBEAT_INTERVAL seconds).
+    - Forwards JobResult or LogResponse messages as soon as they are put into message_queue.
     """
-    next_hb = time.time()
+    next_hb = time.time()  # First time heartbeat is sent immediately
     while True:
         try:
+            # Prioritize sending operational messages to orchestrator as soon as they arrive,
+            # so job results and log responses are not delayed by heartbeat timing.
             msg = message_queue.get(timeout=max(0, next_hb - time.time()))
             yield msg
             continue
         except queue.Empty:
+            # If no operational message is available, fall back to sending heartbeat to maintain liveness and monitoring.
             pass
 
-        # Time for heartbeat
+        # Heartbeat is sent to ensure orchestrator knows agent is alive and can monitor health,
+        # even if no jobs or logs are being processed.
         if time.time() >= next_hb:
             with lock:
+                # Lock is used to avoid race conditions when reading running_containers,
+                # since other threads may be modifying it.
                 containers = list(running_containers)
-            # Get actual CPU and memory usage
+            # Resource stats are included so orchestrator can make scheduling and health decisions.
             cpu_percent = psutil.cpu_percent(interval=None)
             mem = psutil.virtual_memory()
             mem_percent = mem.percent
@@ -173,6 +153,7 @@ def message_generator():
                 mem_percent=mem_percent,
             )
             yield pb.AgentMessage(heartbeat=hb)
+            # Update next_hb so heartbeats are sent at regular intervals, not too frequently.
             next_hb = time.time() + HEARTBEAT_INTERVAL
 
 
@@ -215,7 +196,6 @@ def run_job(job: pb.JobAssignment):
     # Run container with a name for easier management
     container_name = f"olosh-job-{job_id}"
     try:
-        import ast
 
         allowed_keys = {
             "environment",
@@ -329,50 +309,35 @@ def send_logs(job_id: str):
     message_queue.put(pb.AgentMessage(log_response=log_resp))
 
 
-def register_agent():
-    """Register via HTTP to get agent_id, including platform info"""
-    agent_id = HOSTNAME
-    cpu_count = psutil.cpu_count(logical=True)
-    mem_total = int(psutil.virtual_memory().total / (1024 * 1024))
-    os_name = platform.system().lower()  # e.g., 'linux', 'darwin', 'windows'
-    raw_arch = platform.machine().lower()  # e.g., 'x86_64', 'aarch64', 'arm64'
-    # Map to Docker-style arch names
-    arch_map = {
-        "x86_64": "amd64",
-        "aarch64": "arm64",
-        "arm64": "arm64",
-        "armv7l": "arm/v7",
-        "armv6l": "arm/v6",
-    }
-    arch = arch_map.get(raw_arch, raw_arch)
-    payload = {
-        "id": agent_id,
-        "cpu": cpu_count,
-        "mem": mem_total,
-        "labels": [],
-        "platform": {"os": os_name, "arch": arch},
-    }
-    logger.info(
-        f"Registering agent with platform: os={os_name}, arch={arch} (raw: {raw_arch}), agent_id={agent_id}"
-    )
-    resp = requests.post(
-        f"{ORCHESTRATOR_HTTP}/agents/register", json=payload, timeout=5
-    )
-    resp.raise_for_status()
-    # Use our deterministic agent_id
-    logger.info(f"Registered agent_id={agent_id}")
-    return agent_id
+# ─── STATIC INFO ────────────────────────────────────────────────────────────────
+cpu_count = psutil.cpu_count(logical=True) or 1
+mem_total = int(psutil.virtual_memory().total / (1024 * 1024)) or 0
+os_name = platform.system().lower()  # e.g., 'linux', 'darwin', 'windows'
+raw_arch = platform.machine().lower()  # e.g., 'x86_64', 'aarch64', 'arm64'
+# Map to Docker-style arch names
+arch_map = {
+    "x86_64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+    "armv7l": "arm/v7",
+    "armv6l": "arm/v6",
+}
+arch = arch_map.get(raw_arch, raw_arch)
 
 
 def main():
     while True:
         try:
-            agent_id = register_agent()
-            # This is important to identify the agent
-            metadata = [("agent-id", agent_id)]
+            metadata = [
+                ("agent-id", HOSTNAME),
+                ("cpu-count", str(cpu_count)),
+                ("mem-total", str(mem_total)),
+                ("os-name", os_name),
+                ("arch", arch),
+            ]
 
             channel = grpc.insecure_channel(
-                ORCHESTRATOR_GRPC,
+                ORCHESTRATOR_GRPC,  # type: ignore
                 options=[
                     ("grpc.max_send_message_length", MAX_IMAGE_SIZE),
                     ("grpc.max_receive_message_length", MAX_IMAGE_SIZE),
@@ -386,7 +351,12 @@ def main():
 
             # Wait for the response thread to finish (i.e., connection lost)
             while t.is_alive():
-                time.sleep(1)
+                try:
+                    time.sleep(3)
+                except KeyboardInterrupt:
+                    logger.info("Keyboard interrupt received, shutting down agent.")
+                    return
+
             logger.warning(
                 "gRPC connection lost. Will retry registration in 5 seconds."
             )
