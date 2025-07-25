@@ -1,6 +1,6 @@
 # Olosh
 
-Olosh is a lightweight container orchestration tool designed to make use of idle machines on your local network. The name comes from the Bangla word **"অলস" (olosh)** meaning "idle". You can run CI/CD workloads on idle laptops or PCs by connecting them as Olosh agents.
+Olosh is a lightweight container orchestration tool designed to make use of idle machines on your local network or even remotely. The name comes from the Bangla word **"অলস" (olosh)** meaning "idle". You can run CI/CD workloads on idle laptops or PCs by connecting them as Olosh agents.
 
 ## Features
 
